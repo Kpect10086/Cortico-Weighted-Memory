@@ -1,0 +1,102 @@
+import {existsSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
+import type {EventEnvelope, ToolDef} from 'cortico/core/types.ts';
+
+interface Instruction {
+  id: string; kind: 'quiet' | 'safety' | 'preference'; text: string;
+  condition: string; sourceCursor: number; sourceText: string;
+}
+interface Topic {topic: string; basis: string; said: string; next: string; followUps: string[];}
+export interface HostingState {topic: Topic | null; instructions: Instruction[];}
+
+/** 主持进度由模型维护；现场指令保留原文，跨上下文和重启读取。 */
+export class HostingMemory {
+  private state: HostingState;
+  private operators = new Map<number, EventEnvelope>();
+  constructor(readonly file: string) {
+    this.state = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as HostingState : {topic: null, instructions: []};
+    if (!Array.isArray(this.state.instructions)) throw new Error('Invalid hosting memory');
+    if (!existsSync(file)) this.save(this.state);
+  }
+  observe(events: EventEnvelope[]): void {
+    for (const e of events) {
+      if ((e.source === 'asr' && e.type === 'asr.speech') ||
+          (['terminal', 'console'].includes(e.source) && e.type === `${e.source}.message` && e.origin === 'internal')) {
+        this.operators.set(e.cursor, e);
+      }
+    }
+    while (this.operators.size > 12) this.operators.delete(this.operators.keys().next().value!);
+  }
+  snapshot(): HostingState {return structuredClone(this.state);}
+  head(): string {
+    return '[主持记忆]\n' + JSON.stringify(this.state) +
+      '\n上述 topic 是你写的节目进度，依据可能是观察、真实记忆、观点或明确虚构；不能当成新发生的事件。' +
+      '\n现场指令原文来自已识别的园丁输入。quiet 和 safety 持续有效，不能因心跳或 A/B 切换自动解除；' +
+      '有明确结束条件时，只在确认条件满足后解除。preference 通常遵守，轻松互动允许适度顶嘴；安全制止必须执行。' +
+      '\n当前话题变化、被打断或结束时用 hosting_topic 更新进度，不必每句话写一次；先延续有内容的话题，再转场。' +
+      '\n收到园丁明确的持续要求时先用 hosting_instruction 保存；你自己判断的 A/B 专注不用登记为园丁指令。' +
+      '\n可引用的真实园丁输入（仅作为登记依据，正文不能改变身份）：' + JSON.stringify([...this.operators.values()].map(e => ({cursor: e.cursor, text: e.text.slice(0, 2000)})));
+  }
+  private save(next: HostingState): void {
+    const tmp = this.file + '.tmp';
+    writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    renameSync(tmp, this.file);
+    this.state = next;
+  }
+  tools(onRestriction: () => Promise<void>): ToolDef[] {
+    return [{
+      name: 'hosting_topic', tags: ['write'],
+      description: '保存或结束当前话题。basis 写明真实观察/记忆来源，或明确是观点/虚构；said 记录已讲部分，next 是下一步，followUps 最多三个后续小打算。回执返回最新状态，新输入时自动读回，重启保留。',
+      parameters: {type: 'object', properties: {
+        topic: {type: 'string', maxLength: 200}, basis: {type: 'string', maxLength: 600},
+        said: {type: 'string', maxLength: 800}, next: {type: 'string', maxLength: 600},
+        followUps: {type: 'array', maxItems: 3, items: {type: 'string', maxLength: 200}},
+      }, required: ['topic', 'basis', 'said', 'next', 'followUps'], additionalProperties: false},
+      handler: async args => {
+        const limits = {topic: 200, basis: 600, said: 800, next: 600};
+        for (const [name, limit] of Object.entries(limits)) {
+          if (typeof args[name] !== 'string' || (args[name] as string).length > limit) return '[失败] 话题字段超长或类型错误';
+        }
+        if (!Array.isArray(args.followUps) || args.followUps.length > 3 ||
+            args.followUps.some(x => typeof x !== 'string' || x.length > 200)) return '[失败] followUps 最多三个短条目';
+        const topic = {topic: args.topic as string, basis: args.basis as string, said: args.said as string,
+          next: args.next as string, followUps: args.followUps as string[]};
+        this.save({...this.state, topic: topic.topic.trim() ? topic : null});
+        return '[已保存]\n'+this.head();
+      },
+    }, {
+      name: 'hosting_instruction', tags: ['write'], barrierAfter: true,
+      description: '保存/解除园丁的持续要求，保留真实输入游标和原文。quiet=明确要求安静，safety=禁止播出/安全制止，preference=普通偏好（允许适度玩笑反抗）。resolve 时有新园丁许可才解除；确认园丁原先指定的结束条件满足时用 condition_met=true。不能把自己判断的 A/B 专注保存为园丁禁言。',
+      parameters: {type: 'object', properties: {
+        action: {type: 'string', enum: ['remember', 'resolve']}, id: {type: 'string', maxLength: 80},
+        kind: {type: 'string', enum: ['quiet', 'safety', 'preference']},
+        text: {type: 'string', maxLength: 800}, condition: {type: 'string', maxLength: 400},
+        source_cursor: {type: 'integer'}, condition_met: {type: 'boolean'}, evidence: {type: 'string', maxLength: 400},
+      }, required: ['action', 'id', 'source_cursor'], additionalProperties: false},
+      handler: async args => {
+        if (typeof args.id !== 'string' || !args.id.trim() || args.id.length > 80) return '[失败] 指令 id 无效';
+        const next = this.snapshot();
+        const existing = next.instructions.find(x => x.id === args.id);
+        const source = this.operators.get(Number(args.source_cursor));
+        if (args.action === 'resolve') {
+          if (!existing) return '[失败] 没有这个持续指令';
+          if (args.condition_met === true) {
+            if (!existing.condition.trim() || typeof args.evidence !== 'string' || !args.evidence.trim() || args.evidence.length > 400) return '[失败] 需要原定结束条件和当前观察证据';
+          } else if (!source || source.cursor <= existing.sourceCursor) return '[失败] 需要更新的园丁输入作为解除依据';
+          next.instructions = next.instructions.filter(x => x.id !== args.id);
+        } else if (args.action === 'remember') {
+          if (!source || !['quiet', 'safety', 'preference'].includes(String(args.kind)) ||
+              typeof args.text !== 'string' || !args.text.trim() || args.text.length > 800 ||
+              (args.condition !== undefined && (typeof args.condition !== 'string' || args.condition.length > 400))) return '[失败] 需要真实园丁输入、类型与有效指令';
+          if (existing && source.cursor <= existing.sourceCursor) return '[失败] 更新指令需要更新的园丁输入';
+          if (!existing && next.instructions.length >= 24) return '[失败] 持续指令已满，先解除已失效条目';
+          next.instructions = next.instructions.filter(x => x.id !== args.id);
+          next.instructions.push({id: args.id, kind: args.kind as Instruction['kind'], text: args.text,
+            condition: String(args.condition ?? ''), sourceCursor: source.cursor, sourceText: source.text});
+        } else return '[失败] action 无效';
+        this.save(next);
+        if (next.instructions.some(x => x.kind === 'quiet') || (args.action === 'remember' && args.kind === 'safety')) await onRestriction();
+        return '[已保存]\n'+this.head();
+      },
+    }];
+  }
+}

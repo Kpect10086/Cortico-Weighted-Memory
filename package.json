@@ -1,0 +1,82 @@
+{
+  "name": "cortico-bot-weighted-memory",
+  "version": "0.2.1",
+  "type": "module",
+  "main": "./index.ts",
+  "description": "分区权重记忆：Cortico Persona 与 Memory 扩展，支持有证据事件摘要、分区预算、人工审核和版本回滚。",
+  "license": "MIT",
+  "author": "Kpect10086",
+  "keywords": [
+    "cortico-bot",
+    "cortico",
+    "memory",
+    "persona",
+    "weighted-memory"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kpect10086/Cortico-Weighted-Memory.git"
+  },
+  "homepage": "https://github.com/Kpect10086/Cortico-Weighted-Memory#readme",
+  "bugs": {
+    "url": "https://github.com/Kpect10086/Cortico-Weighted-Memory/issues"
+  },
+  "cortico": {
+    "kind": "bot",
+    "api": 7,
+    "displayName": "分区权重记忆",
+    "webUiClient": "./dist/webui.js",
+    "webUiStyle": "./dist/webui.css",
+    "describe": "describe.json",
+    "tags": [
+      "memory",
+      "experimental",
+      "sensitive-data"
+    ],
+    "locales": {
+      "zh": {
+        "displayName": "分区权重记忆"
+      },
+      "en": {
+        "displayName": "Weighted Memory"
+      }
+    }
+  },
+  "files": [
+    "*.ts",
+    "*.mjs",
+    "*.mts",
+    "base",
+    "migrations",
+    "dist/webui.js",
+    "dist/webui.css",
+    "describe.json",
+    "README.md",
+    "HOSTING.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "tests",
+    "scripts",
+    "tsconfig*.json"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "test": "node self-check.mjs && node event-self-check.mjs && tsx context-self-check.ts && tsx hosting-self-check.ts && node --import tsx --test tests/install.test.ts",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "build:web": "node scripts/build-web.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "cortico": "0.2.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "esbuild": "^0.28.2"
+  }
+}
