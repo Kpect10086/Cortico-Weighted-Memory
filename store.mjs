@@ -1,8 +1,9 @@
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, backup } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { anchorTime, absoluteSummary, relativeTime } from './event-time.mjs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
 export const chars = text => [...text].length;
@@ -289,6 +290,29 @@ export class MemoryStore {
       const md=['# 角色记忆全量文档','版本：v2','导出时间：'+new Date().toISOString(),...records.map(r=>`\n## ${r.id}\n- 状态：${r.state}\n- 类型：${r.kind}\n- 发生时间：${r.metadata.occurredAt ?? '时间不确定'}\n- 权重：${r.importance}\n- 摘要：${r.text}\n- 来源：${JSON.stringify(r.metadata.sourceMessageIds ?? [r.source])}\n- 元数据：${JSON.stringify(r.metadata)}\n- 审计：${JSON.stringify(r.audit)}`),...raw.map(r=>`\n## 原始消息 ${r.id}\n时间：${new Date(r.receivedAt).toISOString()}\n作用域：${r.scope}\n${r.text}`)].join('\n');
       this.db.exec('RELEASE export_all');return {md,jsonl,count:records.length};
     }catch(error){this.db.exec('ROLLBACK TO export_all; RELEASE export_all');throw error;}
+  }
+  async exportFile(format, approvedOnly = false) {
+    if (!['json','md','sqlite'].includes(format) || typeof approvedOnly !== 'boolean') throw Error('Invalid export format or scope');
+    if (format !== 'sqlite') {
+      const data=this.exportAll(approvedOnly);
+      const text=format==='md' ? data.md : JSON.stringify({format:'cortico-weighted-memory',version:2,exportedAt:new Date().toISOString(),approvedOnly,data:data.jsonl.split('\n').filter(Boolean).map(line=>JSON.parse(line))},null,2)+'\n';
+      return {$binary:{mime:format==='md'?'text/markdown;charset=utf-8':'application/json;charset=utf-8',base64:Buffer.from(text,'utf8').toString('base64')}};
+    }
+    const dir=mkdtempSync(join(tmpdir(),'memory-export-')),file=join(dir,'memory.sqlite');
+    let copy;
+    try {
+      if (approvedOnly) {
+        const rows=this.exportAll(true).jsonl.split('\n').filter(Boolean).map(line=>JSON.parse(line));
+        copy=new MemoryStore(file);
+        for(const row of rows)copy.put(row);
+        copy.db.exec('DELETE FROM audit');
+        const insert=copy.db.prepare('INSERT INTO audit(rowid,at,operation,recordId,detail) VALUES(?,?,?,?,?)');
+        for(const row of rows)for(const entry of row.audit)insert.run(entry.version,entry.at,entry.operation,entry.recordId,entry.detail);
+        copy.close();copy=null;
+      } else await backup(this.db,file);
+      // shortcut: exports are buffered; use streaming if databases outgrow available memory.
+      return {$binary:{mime:'application/vnd.sqlite3',base64:readFileSync(file).toString('base64')}};
+    } finally {copy?.close();rmSync(dir,{recursive:true,force:true});}
   }
   importAll(jsonl) {
     if(typeof jsonl!=='string') throw Error('Invalid import');

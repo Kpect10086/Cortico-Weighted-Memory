@@ -6,9 +6,9 @@ Owner: index.ts, store.mjs, MemoryStore.
 
 ## 安装
 
-需要 Cortico 0.2.2、Node.js 22.13 或更新版本，以及 Git。使用原生 node:sqlite，其他系统尚未实机验证。
+需要 Cortico 0.2.2、Node.js 22.16 或更新版本，以及 Git。使用原生 node:sqlite，其他系统尚未实机验证。
 
-在 Cortico 扩展页选择 **Persona / Memory（bot）**，安装 `cortico-bot-weighted-memory@0.2.1`。安装完成后，需要为新部署选择这个 bot；它不能像 World 一样挂到任意现有人格上，也不会自动替换当前 bot。已有本地分区权重记忆使用相同 id `vanilla-memory`，不要同时加载两个实现。
+在 Cortico 扩展页选择 **Persona / Memory（bot）**，安装 `cortico-bot-weighted-memory@0.2.2`。安装完成后，需要为新部署选择这个 bot；它不能像 World 一样挂到任意现有人格上，也不会自动替换当前 bot。已有本地分区权重记忆使用相同 id `vanilla-memory`，不要同时加载两个实现。
 
 模型连接在部署中配置，自动整理使用该连接并产生模型用量。默认只声明控制台 World，QQ、游戏、直播等 World 按需另外安装。`weightedMemory.contentReviewUrl` 默认留空；需要内容审核时自行配置兼容的本机审核服务。真实记忆仅存入部署目录，不随扩展上传。
 
@@ -30,6 +30,15 @@ Owner: index.ts, store.mjs, MemoryStore.
 
 单消息候选标记为 `single`，`weightedMemory.singleThreshold` 默认8，可设为1–12。低于门槛的候选保留供追溯，后端拒绝实装。现有1–12档位保持兼容，1–9常规档、10–12重大影响档的评分说明保留。权重和可信度是不同字段。
 
+## 一键导出
+
+在“记忆概览 → 快速添加与导出”选择格式和范围，然后点击“一键导出”。每次只生成一个带时间戳的文件，可选“全部资料”或“仅已通过记忆”。
+
+- JSON：有效 JSON 文档，包含格式版本、导出时间、范围和 data 数组；保留记忆记录、元数据与审计，全部资料还包含原始消息、来源索引和迁移索引。
+- Markdown（.md）：便于阅读的记忆正文、权重、状态、时间、元数据和审计；全部资料包含原始消息正文。
+- SQLite（.sqlite）：可直接用 SQLite 工具打开的独立数据库。全部资料通过在线备份生成一致快照，包含 WAL 中的已提交数据；仅已通过范围只保留已生效长期记忆、其元数据和审计，不带原始消息或待审内容。
+
+导出不修改原数据库，不需要暂停写入。SQLite 在线备份需要 Node.js 22.16 或更新版本。大数据库导出会占用相应内存和临时磁盘空间。
 ## 控制台接口
 
 现有记忆概览面板使用框架认证和通用面板调用接口，无独立未认证路由。写操作只有控制台操作员可调用，Persona 只声明来源查询和候选提交工具。当前框架为共享控制台密码，审计身份记为 `console-operator`，不区分不同登录者。
@@ -42,6 +51,7 @@ Owner: index.ts, store.mjs, MemoryStore.
 - `batchReview(items, state, reason)`：1–50条不同记忆，全部校验版本并在同一事务中通过、拒绝或归档。一条冲突或低权重单句导致整批回滚。
 - `restructure(items, parts, reason)`：多条合并或一条拆分，part 为新摘要表单，sourceIds 和 sourceMessageIds 继承原证据，捏造标记继承，结果均待审。被替代的记录保留。时间未知时必须明确留空。
 - `rollback(id, revision, reason)`：撤销最近可回滚操作；有后续版本变化时拒绝覆盖。审批和正文修改分别回滚。
+- `exportFile(format, approvedOnly)`：下载选定格式；format 为 json / md / sqlite。默认全部资料，范围由界面选择。通过已认证面板的二进制响应下载。
 - `exportAll(approvedOnly)`：返回 md/jsonl。默认全部状态，并包含原始消息、来源索引、迁移追溯和审计。
 - `importAll(jsonl)`：全量导入，已有同 ID 不覆盖，文本或作用域冲突使整批失败。导入的已生效长期摘要重新待审，已拒绝和旧版本状态保留，原审计保留为导入证据，不能借导入自动生效。大文件使用 CLI，避免控制台请求体上限。
 
@@ -58,7 +68,7 @@ Owner: index.ts, store.mjs, MemoryStore.
 
 数据库结构在 `MemoryStore` 首次连接时升级，新增 metadata 列及 `migrations/002-event-memory.sql` 中的表、视图和索引。升级是增量操作，不删除旧数据。先使用 SQLite 在线备份或停止所有写入后复制一致数据库，不能仅复制正在使用的 WAL 数据库主文件。
 
-以下命令在扩展安装目录运行，需要 Node.js 22.13 或更新版本。首先对一致备份演练；写生产数据库前停止旧进程。不要用演练库覆盖仍在接收消息的生产库。
+以下命令在扩展安装目录运行，需要 Node.js 22.16 或更新版本。首先对一致备份演练；写生产数据库前停止旧进程。不要用演练库覆盖仍在接收消息的生产库。
 
 ```powershell
 node event-migrate.mjs status path/to/memory.db

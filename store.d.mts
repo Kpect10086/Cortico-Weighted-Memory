@@ -21,6 +21,7 @@ export class MemoryStore {
   restructure(items:Array<{id:string;revision:string}>,parts:Array<Parameters<MemoryStore['manual']>[0]>,reason:string): {ids:string[]};
   rollback(id:string,revision:string,reason:string): {ok:boolean};
   exportAll(approvedOnly?:boolean): {md:string;jsonl:string;count:number};
+  exportFile(format:'json'|'md'|'sqlite',approvedOnly?:boolean): Promise<{$binary:{mime:string;base64:string}}>;
   importAll(jsonl:string): {count:number};
   review(id: string, state: string, reason: string, revision?: string, threshold?:number): void;
   correct(id: string, text: string, importance: number, reason: string, revision: string, changes?:Record<string,unknown>): string;

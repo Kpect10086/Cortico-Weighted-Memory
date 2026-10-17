@@ -39,10 +39,26 @@ const bundle: WebUiClientBundle = { panels: { ...base.panels,
     const tags=ui.input({placeholder:'标签，用逗号分隔'});
     const transfer=ui.textarea({rows:3});transfer.placeholder='导入 all.jsonl 或合并/拆分后的 JSON 数组';
     const manageActions=ui.actions();
+    const exportFormat=ui.select({value:'json',options:[{value:'json',label:'JSON'},{value:'md',label:'Markdown (.md)'},{value:'sqlite',label:'SQLite (.sqlite)'}]});
+    const exportScope=ui.select({value:'all',options:[{value:'all',label:'全部资料'},{value:'approved',label:'仅已通过记忆'}]});
+    const exportButton=ui.button('一键导出',{variant:'primary',onClick:()=>{void exportMemory();}});
+    const exportActions=ui.actions();exportActions.append(exportButton);
     manage.body.append(ui.field('记忆摘要或自然语言内容',manualText),ui.field('作用域',scope),ui.field('类型',manualKind),ui.field('来源',sourceType),ui.field('发生时间',at),ui.field('生效时间',effective),ui.field('权重',weight),ui.field('标签',tags),ui.field('添加理由',manualReason),manageActions,ui.field('导入或批量合并拆分内容',transfer));
-    const download=(name:string,text:string)=>{const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));const link=ui.h('a') as HTMLAnchorElement;link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+    manage.body.append(ui.field('导出格式',exportFormat),ui.field('导出范围',exportScope),exportActions);
+    const download=(name:string,blob:Blob)=>{const url=URL.createObjectURL(blob);const link=ui.h('a') as HTMLAnchorElement;link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
     const body = ui.h('div');
     const error = ui.msgline();
+    const exportMemory=async()=>{
+      exportButton.disabled=true;exportFormat.disabled=true;exportScope.disabled=true;error.textContent='正在生成导出文件…';
+      try {
+        const format=exportFormat.value,approved=exportScope.value==='approved';
+        const blob=await ctx.invokeBinary('exportFile',[format,approved]);
+        if(ctx.signal.aborted)return;
+        download(`memory-${approved?'approved':'all'}-${new Date().toISOString().replace(/[:.]/g,'-')}.${format}`,blob);
+        error.textContent='导出文件已生成，已发起下载。';
+      }catch(failure){if(!ctx.signal.aborted)error.textContent=`导出失败：${String(failure)}`;}
+      finally{exportButton.disabled=false;exportFormat.disabled=false;exportScope.disabled=false;}
+    };
     const page = ui.msgline();
     let request = 0, offset = 0;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -136,7 +152,7 @@ const bundle: WebUiClientBundle = { panels: { ...base.panels,
     const items=()=>[...selected].map(([id,revision])=>({id,revision}));
     for(const [state,label] of [['active','批量通过'],['rejected','批量拒绝'],['archived','批量归档']]) bulk.append(ui.button(label,{onClick:()=>{void perform('batchReview',[items(),state,bulkReason.value]);}}));
     bulk.append(ui.button('全选当前页',{onClick:()=>{body.querySelectorAll<HTMLInputElement>('input[type=checkbox]').forEach(input=>{input.checked=true;input.dispatchEvent(new Event('change'));});}}),ui.button('提交合并 / 拆分',{onClick:()=>{try{void perform('restructure',[items(),JSON.parse(transfer.value),bulkReason.value]);}catch(failure){error.textContent=String(failure);}}}));
-    manageActions.append(ui.button('添加为待审',{onClick:()=>{if(!weight.reportValidity())return;void perform('manual',[{text:manualText.value,scope:scope.value,kind:manualKind.value,sourceType:sourceType.value,occurredAt:at.value.trim() || null,effectiveAt:effective.value.trim() || null,importance:Number(weight.value),reason:manualReason.value,tags:tags.value.split(/[,，]/).map(t=>t.trim()).filter(Boolean)}]);}}),ui.button('导出全部 all',{onClick:()=>{void ctx.invoke<{md:string;jsonl:string}>('exportAll',[false]).then(data=>{download('all.md',data.md);download('all.jsonl',data.jsonl);}).catch(failure=>{error.textContent=String(failure);});}}),ui.button('导出已通过',{onClick:()=>{void ctx.invoke<{md:string;jsonl:string}>('exportAll',[true]).then(data=>{download('all-approved.md',data.md);download('all-approved.jsonl',data.jsonl);}).catch(failure=>{error.textContent=String(failure);});}}),ui.button('导入为待审',{onClick:()=>{void perform('importAll',[transfer.value]);}}));
+    manageActions.append(ui.button('添加为待审',{onClick:()=>{if(!weight.reportValidity())return;void perform('manual',[{text:manualText.value,scope:scope.value,kind:manualKind.value,sourceType:sourceType.value,occurredAt:at.value.trim() || null,effectiveAt:effective.value.trim() || null,importance:Number(weight.value),reason:manualReason.value,tags:tags.value.split(/[,，]/).map(t=>t.trim()).filter(Boolean)}]);}}),ui.button('导入为待审',{onClick:()=>{void perform('importAll',[transfer.value]);}}));
     controls.append(search,kind,sort,filter, ui.button('刷新', { onClick: () => { void reload(true); } }), previous, next, page);
     filter.addEventListener('change', () => { offset = 0; void reload(); }, { signal: ctx.signal });
     for(const input of [kind,sort]) input.addEventListener('change',()=>{offset=0;void reload();},{signal:ctx.signal});

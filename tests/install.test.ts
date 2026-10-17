@@ -48,6 +48,9 @@ test('published framework APIs archive evidence, pause summarization and require
     assert.match(store.pack([event.senderKey!],'红茶').text,/红茶/);
     const exported=await surface.invoke!('weighted-memory','exportAll',[]) as {jsonl:string};
     assert.ok(exported.jsonl.includes(`event:fixture:${event.cursor}`));
+    const download=await surface.invoke!('weighted-memory','exportFile',['json',true]) as {$binary:{base64:string;mime:string}};
+    assert.match(download.$binary.mime,/application\/json/);
+    assert.ok(JSON.parse(Buffer.from(download.$binary.base64,'base64').toString('utf8')).data.some((row:{text?:string})=>row.text==='用户偏好红茶。'));
     const tools=parts.persona.declareSessions().flatMap(s=>s.tools()).map(t=>t.name);
     for(const name of ['memory_recall','memory_sources','memory_remember','hosting_topic','hosting_instruction']) assert.ok(tools.includes(name),name);
     parts.persona.onOpening?.({reason:'restarted'} as never);

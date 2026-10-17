@@ -99,6 +99,7 @@ const definition: BotDefinition<Config> = {
         invoke: async (panel, method, args) => {
           if (panel !== 'weighted-memory') return surface.invoke?.(panel, method, args);
           if (method === 'exportAll') return store.exportAll(args?.[0] === true);
+          if (method === 'exportFile') return store.exportFile(args?.[0] as 'json'|'md'|'sqlite',args?.[1] as boolean | undefined);
           if (method === 'importAll') { const result=store.importAll(String(args?.[0] ?? '')); scheduleMemoryUpdate(); return result; }
           if (method === 'manual') {
             const input=args?.[0] as Parameters<MemoryStore['manual']>[0];
