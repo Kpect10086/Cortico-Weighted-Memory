@@ -16,6 +16,5 @@ export function toolGuidance(worlds: readonly World[]): string {
 }
 
 function toolLine(tool: ToolDef): string {
-  const required = (tool.parameters as {required?: string[]}).required ?? [];
-  return `- ${tool.name} [${tool.tags.join('/')}]：${tool.description.trim()}${required.length ? ` 必填参数：${required.join('、')}。` : ''}`;
+  return `- ${tool.name} [${tool.tags.join('/')}]`;
 }

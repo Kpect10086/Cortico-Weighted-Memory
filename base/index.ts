@@ -67,7 +67,7 @@ const definition: BotDefinition<CorminiConfig> = {
   declares: DECLARES,
   defaults: () => ({
     ...CORE_DEFAULTS,
-    displayName: '记忆助手',
+    displayName: 'bot',
     providers: {},
     web: { port: 7788, theme: 'mint' },
     paths: { memory: 'workspace', data: 'data' },

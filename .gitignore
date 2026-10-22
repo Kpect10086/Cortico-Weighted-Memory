@@ -1,7 +1,10 @@
 node_modules/
-*.tgz
+fixture-data/
 .env
+.env.*
 .npmrc
+*.tgz
+*.log
 *.db
 *.db-wal
 *.db-shm

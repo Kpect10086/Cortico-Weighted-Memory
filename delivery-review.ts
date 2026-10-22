@@ -9,7 +9,9 @@ export class ReviewCache {
   private readonly failed = new Set<string>();
   private readonly queue: Array<() => void> = [];
   private active = 0;
-  constructor(private readonly review: (text: string) => Promise<string>) {}
+  constructor(private readonly review: (text: string) => Promise<string>, private readonly concurrency = 2) {
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 4) throw Error('Invalid memory review concurrency');
+  }
   peek(text: string): string | undefined { return this.ready.get(text); }
   hasFailed(text: string): boolean { return this.failed.has(text); }
   get(text: string): Promise<string> {
@@ -45,7 +47,7 @@ export class ReviewCache {
   }
   private pump(): void {
     // Leave review capacity for live replies and speech instead of filling every slot.
-    while (this.active < 1 && this.queue.length) this.queue.shift()!();
+    while (this.active < this.concurrency && this.queue.length) this.queue.shift()!();
   }
 }
 

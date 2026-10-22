@@ -17,16 +17,16 @@ try {
   for(const n of [1,2]) {store.captureMessage({source:`fixture-${n}`,scope:'private:A',text:'来源补充',createdAt:Date.now()});store.db.prepare('INSERT INTO event_sources VALUES(?,?)').run(`fixture-${n}`,id);} 
   assert.equal(store.search('拿铁', ['private:A']).length, 0);
   assert.equal(store.search('拿铁', ['private:B']).length, 0);
-  assert.throws(() => store.remember({ text: '喜欢拿铁', sourceId: id, importance: 5, reason: '偏好', kind: 'preference' }, ['private:B']));
-  assert.throws(() => store.remember({ text: '喜欢拿铁', sourceId: id, importance: 5, reason: '', kind: 'preference' }, ['private:A']));
-  const draft = store.remember({ text: '承诺2026-11-01完成任务', sourceId: id, importance: 9, reason: '遗漏会失约', kind: 'commitment' }, ['private:A']);
+  assert.throws(() => store.remember({ text: '喜欢拿铁', sourceId: id, sourceMessageIds: ["fixture-1", "fixture-2"], importance: 5, reason: '偏好', kind: 'preference' }, ['private:B']));
+  assert.throws(() => store.remember({ text: '喜欢拿铁', sourceId: id, sourceMessageIds: ["fixture-1", "fixture-2"], importance: 5, reason: '', kind: 'preference' }, ['private:A']));
+  const draft = store.remember({ text: '承诺2026-11-01完成任务', sourceId: id, sourceMessageIds: ["fixture-1", "fixture-2"], importance: 9, reason: '遗漏会失约', kind: 'commitment' }, ['private:A']);
   assert.equal(store.get(draft).state, 'pending');
   assert(!store.pack(['private:A'], '').text.includes('承诺2026-11-01完成任务'));
   store.review(draft, 'active', '创作者确认');
   assert(store.pack(['private:A'], '').text.includes('承诺2026-11-01完成任务'));
   assert(!store.pack(['private:B'], '').text.includes('承诺2026-11-01完成任务'));
   const revision = key(JSON.stringify(store.get(draft)));
-  const corrected = store.correct(draft, '角色承诺2026-11-08完成任务', 6, '纠正期限', revision);
+  const corrected = store.correct(draft, 'bot承诺2026-11-08完成任务', 6, '纠正期限', revision);
   assert.equal(store.get(draft).state, 'superseded');
   assert.equal(store.get(corrected).source, draft);
   assert.equal(store.get(corrected).importance, 6);
@@ -77,7 +77,7 @@ try {
   store.close();
   reopened = new MemoryStore(file);
   assert.equal(reopened.get(id).source, 'event:1');
-  assert.equal(reopened.get(corrected).text, '角色承诺2026-11-08完成任务');
+  assert.equal(reopened.get(corrected).text, 'bot承诺2026-11-08完成任务');
   assert.equal(reopened.db.prepare("SELECT count(*) AS n FROM audit WHERE operation='operator-correct'").get().n, 1);
   assert.equal(reopened.db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
   reopened.close();
@@ -85,7 +85,7 @@ try {
   try {
     const evidence = tiers.put({ scope: 'main', text: '有来源的记忆事件', kind: 'raw', source: 'event:tiers' });
     for(const n of [1,2])tiers.db.prepare('INSERT INTO event_sources VALUES(?,?)').run(`tier-source-${n}`,evidence);
-    const candidate = importance => ({ text: `档位事件${importance}`, sourceId: evidence, importance, reason: '用户人生中影响重大且持续的事件候选', kind: 'fact' });
+    const candidate = importance => ({ text: `档位事件${importance}`, sourceId: evidence, sourceMessageIds: ["tier-source-1", "tier-source-2"], importance, reason: '用户人生中影响重大且持续的事件候选', kind: 'fact' });
     for (let importance = 1; importance <= 9; importance++) {
       const regular = tiers.remember(candidate(importance), ['main']);
       assert.equal(tiers.get(regular).state, 'pending');tiers.review(regular,'active','人工确认',key(JSON.stringify(tiers.get(regular))));

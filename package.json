@@ -1,6 +1,6 @@
 {
   "name": "cortico-bot-weighted-memory",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "main": "./index.ts",
   "description": "分区权重记忆：Cortico Persona 与 Memory 扩展，支持有证据事件摘要、分区预算、人工审核和版本回滚。",
@@ -52,7 +52,6 @@
     "base",
     "migrations",
     "dist/webui.js",
-    "dist/webui.css",
     "describe.json",
     "README.md",
     "HOSTING.md",
@@ -61,7 +60,8 @@
     "THIRD_PARTY_NOTICES.md",
     "tests",
     "scripts",
-    "tsconfig*.json"
+    "tsconfig*.json",
+    "dist/webui.css"
   ],
   "publishConfig": {
     "access": "public",
@@ -74,7 +74,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "cortico": "0.2.2",
+    "cortico": "0.2.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "esbuild": "^0.28.2"

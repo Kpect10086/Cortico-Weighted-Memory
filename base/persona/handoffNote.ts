@@ -107,8 +107,8 @@ function renderEntry(e: Entry, cap: number): string {
 }
 
 /**
- * 一条投递消息拆成条目:有 sidecar 就按位置切回逐条事件(帧的表头行不要),事件块之前
- * 的内部行算一条;没有 sidecar 整条算一条。上一份交接笔记跳过。
+ * 按 sidecar 切回内部与外部事件；旧记录中未标边界的内部行保留为一条。
+ * 没有 sidecar 时整帧作为一条。上一份交接笔记跳过。
  */
 function deliveryEntries(m: ContextRecord, skipHeader: boolean): Entry[] {
   const refs = m.context.frame?.events;

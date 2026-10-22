@@ -27,7 +27,7 @@ export function contextStageConfigGroup(id: string): ConfigGroup {
           'x-suffix': 'tok',
           'x-hot': true,
           description:
-            '上下文超过阶段预算 × 软阈值比例时先提示；下一批结束时仍超出则交接。',
+            '上下文超过阶段预算 × 软阈值比例时先提示；下一批结束时仍超出则交接。交接后仍超阈值时，先保留至少一份交接笔记预算的新增空间，避免连续交接。',
         },
         'context.keepRatio': {
           type: 'number',

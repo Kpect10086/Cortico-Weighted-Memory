@@ -3,7 +3,7 @@ import {resolve,join} from 'node:path';
 import {ProviderRegistry} from 'cortico/providers/registry.ts';
 import {reviewMemory} from './content-review.ts';
 import {nullLogger} from 'cortico/core/util.ts';
-import {MemoryStore,DEFAULTS,MEMORY_WEIGHT_GUIDE,chars} from './store.mjs';
+import {MemoryStore,DEFAULTS,MEMORY_WEIGHT_GUIDE,MEMORY_ATTRIBUTION_GUIDE,MEMORY_SELECTION_GUIDE,chars} from './store.mjs';
 import type {LLMProviderEntry} from 'cortico/core/types.ts';
 
 const [file,deployment,limitText='1']=process.argv.slice(2);
@@ -28,8 +28,8 @@ try {
     let budget=0;
     const batch=pending.filter(r=>r.scope===scope).filter(r=>{if(chars(r.text)>16000 || budget+chars(r.text)>6000)return false;budget+=chars(r.text);return true;}).slice(0,4);
     if(!batch.length) throw Error('Oversized source requires splitting');
-    const evidence=batch.map(row=>({id:row.id,time:row.createdAt,scope:row.scope,text:row.text,metadata:JSON.parse(row.metadata),messageIds:store.db.prepare('SELECT source FROM event_sources WHERE recordId=?').all(row.id).map(r=>r.source)}));
-    const generation=await registry.bind(name).respond({model:spec.model,reasoning:{effort:'none'},instructions:policy,input:[{type:'message',role:'user',content:JSON.stringify(evidence)}],max_output_tokens:10000},{nativeSpec:{...spec,thinking:false,reasoningEffort:undefined,maxTokens:10000},signal:AbortSignal.timeout(120000),diagnostic:true});
+    const evidence=batch.map(row=>({id:row.id,time:row.createdAt,scope:row.scope,text:row.text,metadata:JSON.parse(row.metadata),messageIds:store.db.prepare('SELECT source FROM event_sources WHERE recordId=?').all(row.id).map(r=>r.source),speakers:store.db.prepare('SELECT raw_messages.id,speaker,receivedAt,run FROM raw_messages JOIN event_sources ON raw_messages.id=event_sources.source WHERE recordId=? ORDER BY receivedAt').all(row.id)}));
+    const generation=await registry.bind(name).respond({model:spec.model,reasoning:{effort:'none'},instructions:policy+MEMORY_ATTRIBUTION_GUIDE+MEMORY_SELECTION_GUIDE,input:[{type:'message',role:'user',content:JSON.stringify(evidence)}],max_output_tokens:10000},{nativeSpec:{...spec,thinking:false,reasoningEffort:undefined,maxTokens:10000},signal:AbortSignal.timeout(120000),diagnostic:true});
     if(generation.response.status!=='completed') {
       appendFileSync(report,JSON.stringify({at:new Date().toISOString(),status:generation.response.status,incomplete:generation.response.incomplete_details,attempts:generation.attempts.map(a=>({meters:a.meters,outcome:a.outcome}))})+'\n');
       throw Error('Incomplete summary response: '+JSON.stringify(generation.response.incomplete_details));

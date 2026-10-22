@@ -12,7 +12,7 @@ import { historyPanelDecl, workspaceInvoke, workspacePanelDecl } from './webUiSu
 import { webUiText } from './strings.ts';
 import { HANDOFF_NOTE_TYPE, handoffNoteStamp, renderHandoffNote } from './handoffNote.ts';
 import { SAVE_BLOB_DECL, saveBlobTool } from './blobs.ts';
-import { BLOBS_DIR, GitWorkspaceMemory, type WorkspaceBlobStore } from './memory.ts';
+import { BLOBS_DIR, LIST_DIR_CAP, GitWorkspaceMemory, type WorkspaceBlobStore } from './memory.ts';
 import { WORKSPACE_TOOL_DECLS, workspaceTools } from './workspaceTools.ts';
 import { Heartbeat, quietLine } from './heartbeat.ts';
 import type { ContextRecord, Item } from 'cortico/protocol/open-responses/context.ts';
@@ -192,6 +192,9 @@ export class Cormini implements Persona {
   protected readonly context: () => ContextStagePolicy;
   /** 软压力速记提醒已注入(交接时重置) */
   protected pressureWarned = false;
+  /** 交接后首批的完整请求占用，用于阶段预算不足时的 fallback。 */
+  private handoffTokens: number | null = null;
+  private awaitingHandoffBatch = false;
   /** 这一批第一次投递的时刻(epoch ms);批末清空 */
   protected batchOpenedAt: number | null = null;
   /** 越过软阈值的那一批开始投递的时刻(epoch ms);null=这一窗还没越过软阈值。交接后重置 */
@@ -496,13 +499,26 @@ export class Cormini implements Persona {
 
   /**
    * 前缀里的工作区清单。大目录折叠为一行计数(每场几十份交接笔记会撑爆缓存前缀);
-   * list_files 指定目录时全量。变体经 prefixFolds() 追加自己的折叠目录。
+   * 其他子目录只列前 LIST_DIR_CAP 个文件；list_files 指定目录时全量。
+   * 变体经 prefixFolds() 追加自己的折叠目录。
    */
   protected prefixWorkspaceListing(): string {
     const files = this.memory.walkFiles();
     if (files.length === 0) return 'Your workspace is empty.';
     const folds = this.prefixFolds();
-    const shown = files.filter((f) => !folds.some((d) => f.startsWith(d.prefix)));
+    const counts = new Map<string, number>();
+    const shown = files.filter((file) => {
+      if (folds.some((d) => file.startsWith(d.prefix))) return false;
+      const slash = file.indexOf('/');
+      if (slash < 0) return true;
+      const dir = file.slice(0, slash);
+      const count = (counts.get(dir) ?? 0) + 1;
+      counts.set(dir, count);
+      return count <= LIST_DIR_CAP;
+    });
+    for (const [dir, count] of counts) {
+      if (count > LIST_DIR_CAP) shown.push(`${dir}/ (${count} 份文件;只列前 ${LIST_DIR_CAP} 份,list_files 指定 dir 为 ${dir} 可列出全部)`);
+    }
     for (const d of folds) {
       const n = files.filter((f) => f.startsWith(d.prefix)).length;
       if (n > 0) shown.push(d.line(n));
@@ -525,6 +541,8 @@ export class Cormini implements Persona {
   }
 
   onOpening(ctx: { reason: SessionOpeningReason }): void {
+    this.handoffTokens = null;
+    this.awaitingHandoffBatch = false;
     const text = ctx.reason === 'restarted' ? '[system] 进程重启,session 已续上。' : '[system] session 已开始。';
     this.core?.injectInternal(text, 'opening');
   }
@@ -561,7 +579,18 @@ export class Cormini implements Persona {
     const info = core.sessionInfo(MAIN);
     if (info.estTokens === null) return;
     const { maxTokens, softRatio } = this.context();
-    if (info.estTokens <= maxTokens * softRatio) return;
+    const softTokens = maxTokens * softRatio;
+    if (this.awaitingHandoffBatch) {
+      this.awaitingHandoffBatch = false;
+      this.handoffTokens = info.estTokens;
+      if (info.estTokens > softTokens) {
+        core.log.warn('交接后请求仍超过阶段软阈值，保留增长余量后再检查', { estTokens: info.estTokens, softTokens });
+      }
+    }
+    // fallback: 固定请求和交接笔记超过软阈值时，须先有一段新增上下文，不能立即再次交接。
+    const threshold = this.handoffTokens === null ? softTokens
+      : Math.max(softTokens, this.handoffTokens + maxTokens * Math.max(1 - softRatio, this.context().keepRatio));
+    if (info.estTokens <= threshold) return;
     if (!this.pressureWarned) {
       this.pressureWarned = true;
       // 越过软阈值的这一批是"当前语境"的起点:交接笔记按它把上一窗切成更早的历史与最近的一段。
@@ -617,6 +646,8 @@ export class Cormini implements Persona {
     writeFileSync(abs, note.text, 'utf8');
     this.lastHandoffFile = file;
     this.pressureWarned = false;
+    this.handoffTokens = null;
+    this.awaitingHandoffBatch = true;
     this.pressureSplitAt = null;
     // 醒来那句话读 lastHandoffFile,所以先写文件。
     this.core?.injectInternal(this.handoffNote(), 'handoff');

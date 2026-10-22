@@ -3,9 +3,28 @@ import type { ToolDef } from 'cortico/core/types.ts';
 import type { GitWorkspaceMemory } from './base/persona/memory.ts';
 
 /** Review the resulting document so edits cannot assemble unsafe text across fragments. */
-export function reviewWorkspaceTools(tools: ToolDef[], memory: GitWorkspaceMemory, review: (text: string) => Promise<string>): ToolDef[] {
+export function reviewWorkspaceTools(tools: ToolDef[], memory: GitWorkspaceMemory, review: (text: string) => Promise<string>, protectedFiles: string[] = []): ToolDef[] {
+  tools = tools.map(original => {
+    const tool = {...original};
+    if (['write_file','append_file','edit_file','delete_file','rename_file','save_blob'].includes(tool.name)) {
+      const handler = tool.handler;
+      tool.handler = async (args,ctx) => {
+        try {
+          const paths = ['path','from','to','old_path','new_path'].map(key => args[key]).filter(value => typeof value === 'string');
+          const fixed = protectedFiles.map(file => memory.insideWorkspace(file).toLowerCase());
+          if (paths.some(path => fixed.some(file => {
+            const target = memory.insideWorkspace(String(path)).toLowerCase();
+            return target === file || file.startsWith(target + '/') || file.startsWith(target + '\\');
+          }))) return '[write blocked] 固定宪法与身份资料只允许控制台操作员修改，自动学习和聊天工具不能改写。';
+        } catch {return '[write blocked] 文件路径无效';}
+        return handler(args,ctx);
+      };
+    }
+    return tool;
+  });
   const write = tools.find(tool => tool.name === 'write_file');
-  return tools.map(tool => {
+  return tools.map(original => {
+    const tool = {...original};
     if (['read_file','grep_files'].includes(tool.name)) return {...tool,handler:async (args,ctx) => {
       const result = await tool.handler(args,ctx);
       if (typeof result !== 'string') return result;

@@ -26,6 +26,18 @@ try {
   assert.match(String(await invoke({action:'resolve',id:'quiet',source_cursor:4})), /已保存/);
   await topic.handler({topic:'薄荷',basis:'园丁刚提到薄荷',said:'聊了气味',next:'聊养护',followUps:['问日照']}, {} as ToolCallContext);
   assert.equal(new HostingMemory(file).snapshot().topic?.next,'聊养护');
+  assert.match(memory.head(), /聊养护/);
+  assert.doesNotMatch(memory.head(new Date(Date.now() + 86400000)), /聊养护/);
+  assert.equal(memory.snapshot().topic?.next, '聊养护');
+  const preserved = memory.snapshot();
+  preserved.topic!.updatedAt = undefined;
+  const legacyFile = join(dir, 'legacy.json');
+  const {writeFileSync} = await import('node:fs');
+  writeFileSync(legacyFile, JSON.stringify(preserved));
+  const legacy = new HostingMemory(legacyFile);
+  assert.doesNotMatch(legacy.head(), /聊养护/);
+  assert.match(legacy.head(), /quiet/);
+  assert.equal(legacy.snapshot().topic?.next, '聊养护');
   assert.match(String(await topic.handler({topic:'x',basis:'',said:'',next:'',followUps:['1','2','3','4']}, {} as ToolCallContext)), /失败/);
   await invoke({action:'remember',id:'round',kind:'quiet',text:'这轮结束再聊',condition:'这轮结束',source_cursor:4});
   assert.match(String(await invoke({action:'resolve',id:'round',source_cursor:4,condition_met:true})), /失败/);

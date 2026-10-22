@@ -1,28 +1,48 @@
-# 分区权重记忆
+# 分区权重记忆 — index.ts / MemoryStore
 
-Owner: index.ts, store.mjs, MemoryStore.
+Cortico Persona 与 Memory（bot）扩展。支持 Cortico 0.2.4 / Bot API 7、Node.js 22.16+、Git。自带基础 Persona、SQLite 存储和编译好的 WebUI；无需另装数据库服务。默认是通用 bot，不带个人设定、聊天、账号或记忆。
 
-这是一个 **Persona 与 Memory（bot）扩展**，基于 Cortico 的 Cormini Persona，并附带其 MIT 授权的基础代码。默认使用通用“记忆助手”，不附带任何个人设定、真实聊天或记忆。
+## 安装与启用
 
-## 安装
+在 Cortico 扩展页选择 Persona / Memory，安装 **cortico-bot-weighted-memory@0.2.3**，为部署选择此 bot 并重启。默认仅声明控制台，QQ、游戏等 World 可另外安装。此包与 cortico-bot-vanilla-memory 使用同一 id vanilla-memory，不可同时加载。它是 bot 扩展，不能作为 World 挂到任意现有人格。
 
-需要 Cortico 0.2.2、Node.js 22.16 或更新版本，以及 Git。使用原生 node:sqlite，其他系统尚未实机验证。
+先在部署中配置可用模型连接；自动摘要、整理与后台认知会使用模型并产生用量。普通摘要默认待人工审核；自动通过默认关闭。weightedMemory.contentReviewUrl 默认留空，可安装 cortico-world-speechreview 后填 http://127.0.0.1:7795/review；填写后若服务不可用，审核不会放行原文。
 
-在 Cortico 扩展页选择 **Persona / Memory（bot）**，安装 `cortico-bot-weighted-memory@0.2.2`。安装完成后，需要为新部署选择这个 bot；它不能像 World 一样挂到任意现有人格上，也不会自动替换当前 bot。已有本地分区权重记忆使用相同 id `vanilla-memory`，不要同时加载两个实现。
+升级前备份部署 workspace 和一致的 SQLite 快照；对 WAL 数据库使用在线备份。包不附带数据库、不自动执行旧数据迁移。公开包与本地版使用同一记忆 id，迁移需先在备份上演练。
 
-模型连接在部署中配置，自动整理使用该连接并产生模型用量。默认只声明控制台 World，QQ、游戏、直播等 World 按需另外安装。`weightedMemory.contentReviewUrl` 默认留空；需要内容审核时自行配置兼容的本机审核服务。真实记忆仅存入部署目录，不随扩展上传。
+## 开发
 
-迁移现有部署前，先备份 workspace 和一致的 SQLite 数据库。本文中的 CLI 路径均相对于扩展安装目录；迁移命令会修改你指定的数据库，先在备份上演练。
+npm install，然后 npm test、npm run typecheck、npm run build:web。Windows 已验证；其他系统未实机验证。WebUI 构建只作用于本包 dist。
 
-## 功能与数据
+## 功能、导出与迁移
 
-### 事件存储
+# `store.mjs` / `MemoryStore` 事件记忆
+
+`attribution.mjs` 提供在线整理、离线整理、工作区读写工具和记忆上下文共用的人物归属说明。说话人 ID、会话、行动主体和承诺双方分别保留，第三方的第一人称不能转成自己的经历，旧总结不能作为独立证据。自动检索条目显示原会话，跨会话资料不能仅按昵称或代词合并。
+
+`context.ts` 在一次上下文内只注入新增或改变的条目正文；同一作用域只列加入、移出的条目 ID，切换作用域时列出完整检索条目 ID，复用已经注入的同版本正文。来源规则不变时不重复注入，交接后重新完整恢复。检索条目使用绝对发生时间，不因“几小时前”等相对时间变化而重复注入；来源、人物和不确定时间仍保留。
+
+`MEMORY_SELECTION_GUIDE` 要求默认略过无关第三方交流，保留理由说明与主体的具体关联。在线和离线摘要同时接收来源消息 ID、发言者 ID、接收时间和运行标识。群聊来源优先以事件的用户 ID 标识发言者；摘要保存从实际选中消息推导的 `sourceSpeakers`，发言者不等于行动主体。多消息来源须显式指定 `sourceMessageIds`，不会默认把整个片段算作本条记忆的证据。
+
+`weightedMemory.autoContentReview` 默认开启，控制普通记忆的写入、读取和页面内容过滤；关闭后不调用自动内容过滤。对话学习候选及训练审批、导出仍使用独立过滤路径。审核开启时缓存去重、两路并发，失败或未完成隐藏正文。来源显示的旧数据不回填推测的发言者。
+
+`weightedMemory.autoApprove` 默认关闭。开启后，已有和新生成的普通待审摘要自动通过，保留来源、权重、审计和回滚；低于单句门槛、核心身份、10–12档、对话学习、导入、捏造及已回滚记录仍需人工审核。自动通过不会授予训练许可。关闭后新摘要恢复待审，已通过条目保持原状态。
+
+主会话在系统前缀统一携带人物归属说明，各工具定义只保留各自用途和参数；文件审核、路径限制和宪法写入保护照常执行。
+
+`hosting.ts` 给主持话题保存更新时间；只有部署时区当天的话题进入当前进度，未标日期或跨日的话题保留在状态文件而不自动续接。quiet、safety 和 preference 持续要求不随话题到期解除。交接时重新校时，已发送内容不因交接变成待回复请求。
+
+`draft-cognition.ts` 为 QQ 空间提供无工具、单轮的只读草稿会话，使用当前 CONSTITUTION 和经过审核的记忆资料。身份资料缺失、超预算、暂停或生成失败时不发布，也不降级绕过身份规则。
 
 原始输入写入 `raw_messages`，保留消息 ID、正文、作用域、发言者和接收时间。内容审核在后台运行，经过审核的来源按同一会话、运行和15分钟窗口组织为缓冲片段，每片段最多3000字符。窗口只限制来源大小，语义事件由模型按活动、话题、参与者、结束信号与时间判断。同一片段可以产生多个事件，同一批次多个片段可以合为一个事件。
 
+在线整理每批最多4个来源、6000字符；旧版较长来源单独整理，超过16000字符的来源保留待人工拆分。关闭本次任务的思考并限制输出4096 token，不改变主会话的思考配置。最多生成8个简洁事件；不完整响应或无效 JSON 不入库，原始来源保留待重试。
+
+队列优先处理近期非迁移来源，再从旧到新处理迁移来源。成功且仍有积压时一分钟后续批；失败按1、2、4、8、15分钟退避，之后最多每15分钟重试，不沿用空闲整理间隔。暂停仍停止自动摘要。`timeConfidence:null` 表示未知，保存为0，不因合法的空值拒绝整批；文字、百分数字符串和超出0–1的数值仍拒绝。
+
 记忆主体可以略过与自己无关的交流；旁观或同处群聊不代表内容与自己有关。在线整理、记忆提交工具和历史摘要均按内容与主体的实际关联判断，不按参与者姓名筛选。整批无相关内容时可返回空数组，不生成候选；原始消息和来源片段保留供追溯。
 
-`memory_candidates` 和 `long_term_memories` 是现有 `records` 表上的视图。全部自动摘要进入 `pending`；审核通过变为 `active`。默认检索和上下文注入只读取已通过的摘要，原始记录和旧档案只供显式 `memory_sources`、控制台和导出追溯。状态还包括 `rejected`、`superseded`、`archived`、`rolled_back`。版本改写保留旧记录，新版本重新进入审核。
+`memory_candidates` 和 `long_term_memories` 是现有 `records` 表上的视图。自动摘要先进入 `pending`，开启自动通过时符合条件的普通候选随后变为 `active`；否则等待人工审核。默认检索和上下文注入只读取已通过的摘要，原始记录和旧档案只供显式 `memory_sources`、控制台和导出追溯。状态还包括 `rejected`、`superseded`、`archived`、`rolled_back`。版本改写保留旧记录，新版本重新进入审核。
 
 `metadata` 保存发生时间 `occurredAt`、时区、时间置信度、原相对时间、来源片段和消息 ID、事件分类、关键事实、人物、地点、结果、情绪、未完成标记、标签和来源类型。无证据的字段为空或 null。`createdAt` 是来源记录时间，不能代替事情发生时间。
 
@@ -43,8 +63,9 @@ Owner: index.ts, store.mjs, MemoryStore.
 
 现有记忆概览面板使用框架认证和通用面板调用接口，无独立未认证路由。写操作只有控制台操作员可调用，Persona 只声明来源查询和候选提交工具。当前框架为共享控制台密码，审计身份记为 `console-operator`，不区分不同登录者。
 
-- `snapshot(filter, offset, retry, query, kind, sort)`：每页30条，搜索、状态和类型筛选，按 time/weight/confidence/category 排序。
+- `snapshot(filter, offset, retry, query, kind, sort)`：每页30条；time 为记录时间新到旧，time-asc 为旧到新；weight 为重要性高到低，weight-asc 为低到高。相同重要性按同方向记录时间、行号排序，翻页次序稳定。还支持 confidence/category。记录时间不是事情发生时间。
 - `detail(id)`：完整摘要、元数据、来源引用、操作记录、完全相同摘要的重复提示。重复提示不替代语义冲突判断。
+- `evidence(id, offset, retry)`：每页最多10条被选中的来源消息，含发言者、会话、接收时间。原文通过内容审核后才显示，未完成返回占位，失败可显式重试。原消息全部缺失时展示已有来源片段并标明未定位原消息，不补造发言者；部分缺失时返回缺失数和来源片段 ID。
 - `manual(input)`：手工或自然语言内容作为摘要添加为待审。input 包含 text、scope、kind、importance、reason、occurredAt、effectiveAt、tags、sourceType。sourceType 只能为 manual/fabricated。留空时间为未知。不会改写真实来源。
 - `correct(id, revision, text, importance, reason, changes)`：编辑后产生待审新版本，原版本变为 superseded。changes 包含 occurredAt 和 tags。
 - `review(id, revision, state, reason)`：单条审核，state 为 active/rejected。
@@ -62,13 +83,13 @@ Owner: index.ts, store.mjs, MemoryStore.
  {"text":"用户喜欢红茶","kind":"preference","importance":8,"occurredAt":null}]
 ```
 
-手工设置 effectiveAt 时，审批后仍要等生效时间才进入检索；捏造记忆在上下文中保留 fabricated 来源标记。没有自动审批、抽样审批或多用户角色系统。
+手工设置 effectiveAt 时，审批后仍要等生效时间才进入检索；捏造记忆在上下文中保留 fabricated 来源标记。自动审批仅限上述普通候选；没有抽样审批或多用户角色系统。
 
 ## 迁移和导出
 
 数据库结构在 `MemoryStore` 首次连接时升级，新增 metadata 列及 `migrations/002-event-memory.sql` 中的表、视图和索引。升级是增量操作，不删除旧数据。先使用 SQLite 在线备份或停止所有写入后复制一致数据库，不能仅复制正在使用的 WAL 数据库主文件。
 
-以下命令在扩展安装目录运行，需要 Node.js 22.16 或更新版本。首先对一致备份演练；写生产数据库前停止旧进程。不要用演练库覆盖仍在接收消息的生产库。
+以下命令在仓库根目录运行，需要 Node.js 22.16 或更新版本。首先对一致备份演练；写生产数据库前停止旧进程。不要用演练库覆盖仍在接收消息的生产库。
 
 ```powershell
 node event-migrate.mjs status path/to/memory.db
@@ -95,14 +116,12 @@ node event-migrate.mjs import path/to/new.db ./exports/review/all.jsonl
 
 ```powershell
 node self-check.mjs
-npm test
-npm run typecheck
-npm run build:web
+pnpm exec vitest run tests/web/memory-event-console.test.ts tests/integration/memory-event-workflow.test.ts tests/integration/memory-event-segments.test.ts tests/integration/memory-delivery-review.test.ts tests/integration/memory-content-review.test.ts
+pnpm exec tsc -p tsconfig.json --noEmit
+pnpm exec tsc -p tsconfig.web.json --noEmit
 ```
 
 自检使用临时真实 SQLite，覆盖游戏和茶事件的精确消息引用、时间锚定、门槛、30条审核的原子性、版本冲突、捏造标记、合并拆分、版本回滚、完整导入导出、重复迁移和迁移回滚。集成测试使用真实 Persona 管线和脚本模型，不访问网络。
 
 
-## 开发
-
-`npm install`，然后运行 `npm test`、`npm run typecheck` 和 `npm run build:web`。自检使用临时数据库，不启动 bot、不调用云端模型。GitHub 源码与 npm 使用同一份发布产物；上游来源与版权见 THIRD_PARTY_NOTICES.md 和 LICENSE。
+公开 Cortico 0.2.4 不提供 fork 的独立生成档位和 deferred 触发选项，因此后台任务继承宿主的模型思考与输出配置；其延迟和用量可能高于带这些接口的定制框架。
