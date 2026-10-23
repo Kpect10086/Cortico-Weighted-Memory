@@ -3,7 +3,7 @@
  * Persona 提供权限、虚拟文件、前缀渲染及清除策略；工具定义在 workspaceTools.ts。
  */
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync,
+  appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
   renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, normalize as pathNormalize, relative, resolve, sep } from 'node:path';
@@ -42,8 +42,22 @@ export function normalizeWorkspacePath(relPath: string): string {
  * resolveSafe 另拒绝所有 '..' 段；调用方按接口的路径约束选用。
  */
 function insideWorkspace(root: string, rel: string): string {
+  root = resolve(root);
   const abs = resolve(root, pathNormalize(rel));
-  if (abs !== root && !abs.startsWith(root + sep)) throw new Error(`path escapes workspace: ${rel}`);
+  const fromRoot = relative(root, abs);
+  if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+    throw new WorkspaceError(`path escapes workspace: ${rel}`);
+  }
+  // Lexical containment alone allows Linux symlinks and Windows junctions to
+  // escape the workspace. Do not follow links below the configured root,
+  // including dangling links and links to paths that will be created later.
+  let current = root;
+  for (const segment of fromRoot.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (!entry) break;
+    if (entry.isSymbolicLink()) throw new WorkspaceError(`工作区路径不能经过符号链接: ${rel}`);
+  }
   return abs;
 }
 
@@ -80,7 +94,7 @@ export function globToRegExp(glob: string): RegExp {
 
 /** 一个目录的清单行。`full` 为假时只取前 `LIST_DIR_CAP` 项,末尾补一行"共几项、怎么看全"。 */
 function listDirLines(abs: string, prefix: string, full: boolean): string[] {
-  const names = readdirSync(abs).sort().filter((name) => !name.startsWith('.'));
+  const names = readdirSync(abs).sort().filter((name) => !name.startsWith('.') && !lstatSync(join(abs, name)).isSymbolicLink());
   const shown = full ? names : names.slice(0, LIST_DIR_CAP);
   const out: string[] = [];
   for (const name of shown) {
@@ -101,7 +115,9 @@ function walkFilesAbs(dir: string, prefix: string): string[] {
     if (name.startsWith('.')) continue;
     const abs = join(dir, name);
     const rel = prefix ? `${prefix}/${name}` : name;
-    if (statSync(abs).isDirectory()) out.push(...walkFilesAbs(abs, rel));
+    const entry = lstatSync(abs);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) out.push(...walkFilesAbs(abs, rel));
     else out.push(rel);
   }
   return out;
@@ -162,7 +178,8 @@ export class WorkspaceBlobStore implements BlobStore {
       for (const name of readdirSync(dir).sort()) {
         if (name.startsWith('.')) continue;
         const abs = join(dir, name);
-        const st = statSync(abs);
+        const st = lstatSync(abs);
+        if (st.isSymbolicLink()) continue;
         if (st.isDirectory()) walk(abs);
         else {
           const rel = relative(this.root, abs);
@@ -223,7 +240,7 @@ export class GitWorkspaceMemory {
   /** 建目录骨架。哪几个目录同样是人格约定,由调用方给。 */
   ensureDirs(dirs: readonly string[]): void {
     for (const d of dirs) {
-      mkdirSync(join(this.memoryDir, ...d.split('/').filter(Boolean)), { recursive: true });
+      mkdirSync(this.resolveSafe(d), { recursive: true });
     }
   }
 
@@ -244,12 +261,7 @@ export class GitWorkspaceMemory {
     if (s.split('/').some((seg) => seg === '..')) {
       throw new WorkspaceError(`路径不能包含"..",不允许离开工作区:${s}`);
     }
-    const abs = resolve(this.memoryDir, s);
-    const rel = relative(this.memoryDir, abs);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
-      throw new WorkspaceError(`路径解析后越出了工作区:${s}`);
-    }
-    return abs;
+    return insideWorkspace(this.memoryDir, s);
   }
 
   /** 工具层那条较松的护栏(见 `insideWorkspace` 的注释);逃逸抛普通 Error。 */
@@ -358,7 +370,7 @@ export class GitWorkspaceMemory {
       throw new WorkspaceError(`${this.normalize(relPath)} 是文件,用 read_file 读它`);
     }
     return readdirSync(abs, { withFileTypes: true })
-      .filter((e) => visibleEntry(e.name))
+      .filter((e) => visibleEntry(e.name) && !e.isSymbolicLink())
       .sort(dirsFirst)
       .map((e) => (e.isDirectory() ? `${e.name}/` : e.name));
   }
@@ -389,7 +401,7 @@ export class GitWorkspaceMemory {
     const lines: string[] = ['persona/'];
     const walk = (abs: string, prefix: string): void => {
       const entries = readdirSync(abs, { withFileTypes: true })
-        .filter((e) => visibleEntry(e.name))
+        .filter((e) => visibleEntry(e.name) && !e.isSymbolicLink())
         .sort(dirsFirst);
       entries.forEach((e, i) => {
         const last = i === entries.length - 1;
@@ -405,7 +417,7 @@ export class GitWorkspaceMemory {
   treeShallow(): string {
     const lines: string[] = ['persona/'];
     for (const e of readdirSync(this.memoryDir, { withFileTypes: true })
-      .filter((entry) => visibleEntry(entry.name))
+      .filter((entry) => visibleEntry(entry.name) && !entry.isSymbolicLink())
       .sort(dirsFirst)) {
       lines.push(e.isDirectory() ? `${e.name}/` : e.name);
     }

@@ -13,6 +13,8 @@ test('JSON, Markdown and SQLite export approved/all scopes without mutating live
     const approved=store.manual({text:'已批准的中文记忆 🌿',scope:'main',kind:'event',importance:5,sourceType:'manual',reason:'明确依据'});
     store.review(approved,'active','确认',key(JSON.stringify(store.get(approved))));
     store.manual({text:'尚未批准的内容',scope:'other',kind:'event',importance:5,sourceType:'manual',reason:'待审批'});
+    const future=store.manual({text:'未来生效的内容',scope:'main',kind:'event',importance:5,sourceType:'manual',reason:'安排',effectiveAt:'2099-01-01T00:00:00Z'});
+    store.review(future,'active','确认将来生效',key(JSON.stringify(store.get(future))));
     store.captureMessage({source:'source-1',scope:'main',text:'原始来源证据',createdAt:Date.now()});
     store.archiveEvent({source:'source-1',scope:'main',text:'原始来源证据',createdAt:Date.now(),run:'fixture'});
     const original=store.exportAll();
@@ -23,17 +25,20 @@ test('JSON, Markdown and SQLite export approved/all scopes without mutating live
       assert.equal(json.format,'cortico-weighted-memory');assert.equal(json.approvedOnly,approvedOnly);
       assert.ok(json.data.some((r:{text?:string})=>r.text==='已批准的中文记忆 🌿'));
       assert.equal(json.data.some((r:{text?:string})=>r.text==='尚未批准的内容'),!approvedOnly);
+      assert.equal(json.data.some((r:{text?:string})=>r.text==='未来生效的内容'),!approvedOnly);
       assert.equal(json.data.some((r:{entity?:string})=>r.entity==='raw_message'),!approvedOnly);
       const md=await store.exportFile('md',approvedOnly);
       const text=Buffer.from(md.$binary.base64,'base64').toString('utf8');
       assert.match(text,/已批准的中文记忆 🌿/);assert.equal(text.includes('尚未批准的内容'),!approvedOnly);
+      assert.equal(text.includes('未来生效的内容'),!approvedOnly);
       const sqlite=await store.exportFile('sqlite',approvedOnly);
       const bytes=Buffer.from(sqlite.$binary.base64,'base64');assert.equal(bytes.subarray(0,16).toString(),'SQLite format 3\0');
       const file=join(root,approvedOnly?'approved.sqlite':'all.sqlite');writeFileSync(file,bytes);
       const db=new DatabaseSync(file,{readOnly:true});
       try{
         assert.equal(db.prepare('PRAGMA integrity_check').get()!.integrity_check,'ok');
-        assert.equal(db.prepare('SELECT count(*) AS n FROM records').get()!.n,approvedOnly?1:3);
+        assert.equal(db.prepare('SELECT count(*) AS n FROM records').get()!.n,approvedOnly?1:4);
+        assert.equal(db.prepare("SELECT count(*) AS n FROM records WHERE text='未来生效的内容'").get()!.n,approvedOnly?0:1);
         assert.equal(db.prepare('SELECT count(*) AS n FROM raw_messages').get()!.n,approvedOnly?0:1);
         assert.equal(db.prepare('SELECT count(*) AS n FROM event_sources').get()!.n,approvedOnly?0:1);
         assert.equal(db.prepare("SELECT count(*) AS n FROM records WHERE state='pending'").get()!.n,approvedOnly?0:1);
@@ -44,7 +49,7 @@ test('JSON, Markdown and SQLite export approved/all scopes without mutating live
     }
     assert.equal(store.exportAll().jsonl,original.jsonl,'export cannot change original state or audit');
     store.put({scope:'main',text:'导出后仍可写入',source:'after-export'});
-    assert.equal(store.stats().total,4);
+    assert.equal(store.stats().total,5);
     await assert.rejects(store.exportFile('exe' as never),/Invalid export/);
     await assert.rejects(store.exportFile('json','true' as never),/Invalid export/);
   }finally{store.close();rmSync(root,{recursive:true,force:true});}

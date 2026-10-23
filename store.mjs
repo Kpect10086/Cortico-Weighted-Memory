@@ -362,7 +362,7 @@ export class MemoryStore {
   exportAll(approvedOnly = false) {
     this.db.exec('SAVEPOINT export_all');
     try {
-      const rows = this.db.prepare(`SELECT * FROM records ${approvedOnly ? "WHERE state='active' AND kind NOT IN ('raw','archive')" : ''} ORDER BY createdAt,id`).all();
+      const rows = this.db.prepare(`SELECT * FROM records ${approvedOnly ? "WHERE state='active' AND kind NOT IN ('raw','archive') AND (json_extract(metadata,'$.effectiveAt') IS NULL OR julianday(json_extract(metadata,'$.effectiveAt'))<=julianday(?,'unixepoch'))" : ''} ORDER BY createdAt,id`).all(...(approvedOnly ? [Date.now()/1000] : []));
       const records=rows.map(row=>({...row,metadata:JSON.parse(row.metadata),audit:this.db.prepare('SELECT rowid AS version,* FROM audit WHERE recordId=? ORDER BY rowid').all(row.id)}));
       const raw=approvedOnly?[]:this.db.prepare('SELECT * FROM raw_messages ORDER BY receivedAt,id').all().map(row=>({entity:'raw_message',...row}));
       const links=approvedOnly?[]:this.db.prepare('SELECT * FROM event_sources ORDER BY source').all().map(row=>({entity:'source_link',...row}));
@@ -420,11 +420,23 @@ export class MemoryStore {
     this.db.exec('SAVEPOINT import_all');
     try {
       for(const row of rows) {
-        if(row.entity==='raw_message') this.captureMessage({...row,source:row.id,createdAt:row.receivedAt});
+        if(row.entity==='raw_message') {
+          const existing=this.db.prepare('SELECT * FROM raw_messages WHERE id=?').get(row.id);
+          if(existing && ['scope','text','receivedAt','speaker','run'].some(field=>existing[field]!==row[field])) throw Error('Import raw message id conflict');
+          this.captureMessage({...row,source:row.id,createdAt:row.receivedAt});
+        }
         else if(row.entity==='source_link') {
           if(!this.get(row.recordId)) throw Error('Source link missing record');
+          const existing=this.db.prepare('SELECT * FROM event_sources WHERE source=?').get(row.source);
+          if(existing && existing.recordId!==row.recordId) throw Error('Import source link conflict');
           this.db.prepare('INSERT OR IGNORE INTO event_sources VALUES(?,?)').run(row.source,row.recordId);
-        } else if(row.entity==='migration_source') this.db.prepare('INSERT OR IGNORE INTO migration_sources VALUES(?,?,?)').run(row.recordId,row.batch,row.previousState);
+        } else if(row.entity==='migration_source') {
+          if(!this.get(row.recordId)) throw Error('Migration source missing record');
+          if(typeof row.batch!=='string' || !/^[\w-]{1,80}$/u.test(row.batch) || !['active','pending'].includes(row.previousState)) throw Error('Invalid migration source');
+          const existing=this.db.prepare('SELECT * FROM migration_sources WHERE recordId=?').get(row.recordId);
+          if(existing && (existing.batch!==row.batch || existing.previousState!==row.previousState)) throw Error('Import migration source conflict');
+          this.db.prepare('INSERT OR IGNORE INTO migration_sources VALUES(?,?,?)').run(row.recordId,row.batch,row.previousState);
+        }
         else {
           if(!['active','pending','rejected','superseded','archived','rolled_back'].includes(row.state) || !['raw','archive','core','commitment','fact','preference','relation','recent','single','event'].includes(row.kind)) throw Error('Invalid import state/kind');
           // Imported memories always require operator approval, including fabricated records.

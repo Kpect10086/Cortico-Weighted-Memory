@@ -12,7 +12,9 @@ Cortico Persona 与 Memory（bot）扩展。支持 Cortico 0.2.6 / Bot API 7、N
 
 ## 开发
 
-npm install，然后 npm test、npm run typecheck、npm run build:web。Windows 已验证；其他系统未实机验证。WebUI 构建只作用于本包 dist。
+npm ci，然后 npm test、npm run typecheck、npm run build:web。需要 Node.js 22.16+ 和 Git；命令可在 Linux、macOS 与 Windows 的仓库目录执行。Windows 已验证；本次修复消除了自检中写死 Windows 路径分隔符的问题，并提供 Ubuntu / Windows / macOS、Node.js 22.16 / 24 的 CI 矩阵，其他系统仍须以 CI 或部署实测结果为准。WebUI 构建只作用于本包 dist。
+
+工作区文件与附件接口拒绝经过子目录符号链接（包括 Windows junction）的读写，文件遍历也跳过链接，避免越界访问和循环目录。工作区根目录可以由部署自行指定；需要读取的文件应实际存放在该目录中。
 
 ## 功能、导出与迁移
 
@@ -118,18 +120,18 @@ node event-migrate.mjs import path/to/new.db ./exports/review/all.jsonl
 
 全部候选仍需人工审核。迁移回滚恢复原记录状态及处理标记，并把本批新来源和候选停用；已有操作改动了原版本时拒绝回滚。运行时整理器每批最多12个片段、16000字符，最多30个语义事件。积压按配置的整理间隔继续下一批，人工暂停期间停止整理，失败来源重试；超过预算的单条来源保留待人工拆分。原样迁移的大量重复技术档案仍需要模型判断是否有长期价值；不同批次的同一事件可能需要控制台合并。
 
-旧 `migrate.mjs` 只用于首次导入旧 JSON 和工作区，笔记导入后也须审核；存量事件重整使用 event-migrate.mjs。
+旧 `migrate.mjs` 只用于首次导入旧 JSON 和工作区，笔记导入后也须审核；旧部署没有 workspace 目录时仍可导入 JSON，工作区遍历跳过符号链接。存量事件重整使用 event-migrate.mjs。
 
 ## 验证
 
-```powershell
-node self-check.mjs
-pnpm exec vitest run tests/web/memory-event-console.test.ts tests/integration/memory-event-workflow.test.ts tests/integration/memory-event-segments.test.ts tests/integration/memory-delivery-review.test.ts tests/integration/memory-content-review.test.ts
-pnpm exec tsc -p tsconfig.json --noEmit
-pnpm exec tsc -p tsconfig.web.json --noEmit
+```sh
+npm ci
+npm test
+npm run typecheck
+npm run build:web
 ```
 
-自检使用临时真实 SQLite，覆盖游戏和茶事件的精确消息引用、时间锚定、门槛、30条审核的原子性、版本冲突、捏造标记、合并拆分、版本回滚、完整导入导出、重复迁移和迁移回滚。集成测试使用真实 Persona 管线和脚本模型，不访问网络。
+自检使用临时真实 SQLite，覆盖游戏和茶事件的精确消息引用、时间锚定、门槛、30条审核的原子性、版本冲突、捏造标记、合并拆分、版本回滚、完整导入导出、重复迁移和迁移回滚。仓库内的测试还覆盖真实 Persona 管线、未来生效记忆的导出过滤、原始证据与来源索引的导入冲突及整批回滚、缺少工作区的旧 JSON 迁移，以及符号链接和循环目录边界。测试使用脚本模型，不访问网络。
 
 
 公开 Cortico 0.2.6 不提供 fork 的独立生成档位和 deferred 触发选项，因此后台任务继承宿主的模型思考与输出配置；其延迟和用量可能高于带这些接口的定制框架。

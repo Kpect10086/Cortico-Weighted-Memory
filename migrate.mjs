@@ -27,7 +27,7 @@ export function migrate(deployment) {
     const workspace = join(deployment, 'workspace');
     const walk = (directory, relative = '') => {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        if (entry.name.startsWith('.') || entry.name === 'blobs') continue;
+        if (entry.name.startsWith('.') || entry.name === 'blobs' || entry.isSymbolicLink()) continue;
         const rel = relative ? relative + '/' + entry.name : entry.name;
         const file = join(directory, entry.name);
         if (entry.isDirectory()) walk(file, rel);
@@ -41,7 +41,7 @@ export function migrate(deployment) {
         }
       }
     };
-    walk(workspace);
+    if (existsSync(workspace)) walk(workspace);
     store.db.exec('COMMIT');
     const result = { added: store.stats().total - before, ...store.stats() };
     store.close();

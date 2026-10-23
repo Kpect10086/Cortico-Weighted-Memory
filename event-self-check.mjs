@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { MemoryStore, key } from './store.mjs';
 import { anchorTime, relativeTime } from './event-time.mjs';
 import { stage, rollbackMigration } from './event-migrate.mjs';
@@ -79,6 +79,8 @@ try {
   assert.equal(store.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
   console.log('PASS: event grouping, evidence, absolute time, single threshold, 30-row atomic review, fabricated provenance, merge/split, rollback, export/import, idempotent migration');
 }finally{
-  store.close();assert(resolve(directory).startsWith(resolve(tmpdir())+'\\'));
+  store.close();
+  const withinTemporary = relative(resolve(tmpdir()), resolve(directory));
+  assert(withinTemporary && withinTemporary !== '..' && !withinTemporary.startsWith(`..${sep}`) && !isAbsolute(withinTemporary));
   rmSync(directory,{recursive:true,force:true});
 }
