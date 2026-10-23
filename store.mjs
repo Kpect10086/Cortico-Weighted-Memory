@@ -137,13 +137,65 @@ export class MemoryStore {
     return { sql: `(scope IN (${names.map(() => '?').join(',') || "''"}) OR (kind='core' AND scope='main'))`, args: names };
   }
   search(query, scopes, limit = 8, now = Date.now()) {
+    if (!query.trim()) return [];
     const words = terms(query).slice(0, 16);
-    if (!words.length) return [];
     const match = words.map(w => `"${w.replaceAll('"', '""')}"`).join(' OR ');
     const a = this.allowed(scopes);
-    return this.db.prepare(`SELECT records.*,bm25(search) AS relevance FROM search JOIN records ON search.rowid=records.rowid
-      WHERE search MATCH ? AND state='active' AND kind NOT IN ('raw','archive') AND ${a.sql} AND (json_extract(metadata,'$.effectiveAt') IS NULL OR julianday(json_extract(metadata,'$.effectiveAt'))<=julianday(?,'unixepoch')) AND ${usefulArchive} ORDER BY relevance,importance DESC,createdAt DESC LIMIT ?`)
-      .all(match, ...a.args, now/1000, Math.max(1, Math.min(30, limit)));
+    const eligible = `state='active' AND kind NOT IN ('raw','archive') AND ${a.sql} AND (json_extract(metadata,'$.effectiveAt') IS NULL OR julianday(json_extract(metadata,'$.effectiveAt'))<=julianday(?,'unixepoch'))`;
+    const count = Math.max(1, Math.min(30, limit));
+    const rows = words.length ? this.db.prepare(`SELECT records.*,bm25(search) AS relevance FROM search JOIN records ON search.rowid=records.rowid
+      WHERE search MATCH ? AND ${eligible} ORDER BY relevance,importance DESC,createdAt DESC LIMIT ?`).all(match, ...a.args, now/1000, count) : [];
+    if (rows.length === count) return rows;
+    const literals = [...new Set([query.trim(), ...words])];
+    const patterns = literals.map(word => '%' + word.replace(/[\\%_]/g, '\\$&') + '%');
+    // shortcut: scoped LIKE fills missing substring hits; add a trigram index if measured scans become slow.
+    const fallback = this.db.prepare(`SELECT records.*,NULL AS relevance FROM records WHERE ${eligible}
+      AND id NOT IN (SELECT value FROM json_each(?)) AND (${patterns.map(() => "text LIKE ? ESCAPE '\\'").join(' OR ')})
+      ORDER BY importance DESC,createdAt DESC,id LIMIT ?`).all(...a.args, now/1000, JSON.stringify(rows.map(row => row.id)), ...patterns, count - rows.length);
+    return [...rows, ...fallback];
+  }
+  evidence(id, offset = 0, scopes, now = Date.now()) {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw Error('Invalid evidence offset');
+    const row = this.get(id);
+    // Shared core summaries do not grant access to another conversation's raw messages.
+    if (!row || (scopes && (!scopes.includes(row.scope) || row.state !== 'active' || ['raw','archive'].includes(row.kind) || Date.parse(JSON.parse(row.metadata).effectiveAt) > now))) throw Error('Memory unavailable in current scope');
+    const meta = JSON.parse(row.metadata), ids = meta.sourceMessageIds ?? [], sourceIds = meta.sourceIds ?? [];
+    const rawCount = Number(this.db.prepare('SELECT count(*) AS n FROM raw_messages WHERE scope=? AND id IN (SELECT value FROM json_each(?))').get(row.scope, JSON.stringify(ids)).n);
+    const fragments = rawCount === 0;
+    const rows = fragments
+      ? this.db.prepare("SELECT id,scope,'' AS speaker,createdAt AS receivedAt,text FROM records WHERE scope=? AND id IN (SELECT value FROM json_each(?)) ORDER BY createdAt,id LIMIT 10 OFFSET ?").all(row.scope, JSON.stringify(sourceIds), offset)
+      : this.db.prepare('SELECT id,scope,speaker,receivedAt,text FROM raw_messages WHERE scope=? AND id IN (SELECT value FROM json_each(?)) ORDER BY receivedAt,id LIMIT 10 OFFSET ?').all(row.scope, JSON.stringify(ids), offset);
+    const matched = fragments ? Number(this.db.prepare('SELECT count(*) AS n FROM records WHERE scope=? AND id IN (SELECT value FROM json_each(?))').get(row.scope, JSON.stringify(sourceIds)).n) : rawCount;
+    const visibleSources = scopes ? this.db.prepare('SELECT id FROM records WHERE scope=? AND id IN (SELECT value FROM json_each(?))').all(row.scope, JSON.stringify(sourceIds)).map(source => source.id) : sourceIds;
+    return {rows, matched, sourceIds: visibleSources, missing: Math.max(0, ids.length - rawCount), fragments};
+  }
+  audit(scopes, now = Date.now()) {
+    const a = this.allowed(scopes);
+    const where = `state='active' AND kind NOT IN ('raw','archive') AND ${a.sql} AND (json_extract(metadata,'$.effectiveAt') IS NULL OR julianday(json_extract(metadata,'$.effectiveAt'))<=julianday(?,'unixepoch'))`;
+    const total = Number(this.db.prepare(`SELECT count(*) AS n FROM records WHERE ${where}`).get(...a.args, now/1000).n);
+    const rows = this.db.prepare(`SELECT id,scope,text,
+      (SELECT count(*) FROM json_each(coalesce(json_extract(records.metadata,'$.sourceMessageIds'),'[]')) ref WHERE NOT EXISTS (SELECT 1 FROM raw_messages m WHERE m.id=ref.value AND m.scope=records.scope)) missingMessages,
+      (SELECT count(*) FROM json_each(coalesce(json_extract(records.metadata,'$.sourceIds'),'[]')) ref WHERE NOT EXISTS (SELECT 1 FROM records source WHERE source.id=ref.value AND source.scope=records.scope)) missingRecords
+      FROM records WHERE ${where} ORDER BY createdAt DESC,id LIMIT 2000`).all(...a.args, now/1000);
+    const groups = new Map();
+    const missingSources = [];
+    let truncated = total > rows.length;
+    for (const row of rows) {
+      const normalized = row.text.toLowerCase().replace(/[\p{P}\s]/gu, '');
+      if (normalized.length >= 8) {
+        const fingerprint = JSON.stringify([row.scope, normalized]);
+        const group = groups.get(fingerprint) ?? {ids: [], scope: row.scope, approximate: false, text: row.text};
+        group.ids.push(row.id); group.approximate ||= group.text !== row.text; groups.set(fingerprint, group);
+      }
+      if (row.missingMessages || row.missingRecords) {
+        if (missingSources.length < 50) missingSources.push({id: row.id, missingMessages: row.missingMessages, missingRecords: row.missingRecords});
+        else truncated = true;
+      }
+    }
+    const duplicates = [...groups.values()].filter(group => group.ids.length > 1);
+    return {scanned: rows.length, total, truncated: truncated || duplicates.length > 50,
+      duplicates: duplicates.slice(0, 50).map(({text, ...group}) => group), missingSources,
+      note: '仅检查当前可见的已生效记忆；每类最多展示50组，重复只比较同会话，近似重复仅忽略标点、空白和大小写。缺失来源不等于事实为假；此检查不修改或删除记忆。'};
   }
   captureMessage({source, scope, text, createdAt, run = '', speaker = ''}) {
     if (!source || !scope || typeof text !== 'string' || !text.trim() || !Number.isFinite(createdAt)) throw Error('Invalid raw message');

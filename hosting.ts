@@ -6,7 +6,8 @@ interface Instruction {
   condition: string; sourceCursor: number; sourceText: string;
 }
 interface Topic {topic: string; basis: string; said: string; next: string; followUps: string[]; updatedAt?: string;}
-export interface HostingState {topic: Topic | null; instructions: Instruction[];}
+interface Goal {aim: string; basis: string; progress: string; next: string; scene: string; resumeWhen: string; updatedAt: string;}
+export interface HostingState {topic: Topic | null; goal?: Goal | null; instructions: Instruction[];}
 
 /** 主持进度由模型维护；现场指令保留原文，跨上下文和重启读取。 */
 export class HostingMemory {
@@ -37,6 +38,7 @@ export class HostingMemory {
       '\n现场指令原文来自已识别的园丁输入。quiet 和 safety 持续有效，不能因心跳或 A/B 切换自动解除；' +
       '有明确结束条件时，只在确认条件满足后解除。preference 通常遵守，轻松互动允许适度顶嘴；安全制止必须执行。' +
       '\n当前话题变化、被打断或结束时用 hosting_topic 更新进度；结束时 topic 填空。主持进度只描述其记录时的活动，不要求在 QQ 私聊里续讲；以当前会话最新输入为准，已经说过的内容不再换一种说法重说。' +
+      '\n可用同一工具的 goal 保存一个自己的小目标：aim 想做什么，basis 为何想做及真实依据，progress 已确认进度，next 下一步，scene 所属活动或会话，resumeWhen 适合继续的条件。省略 goal 保留原目标，传 null 表示完成或放弃；切换话题和隔天不会自动清掉目标。目标是当时的打算，不证明当前仍有效、条件已满足或操作已获授权；恢复前核对最新场景、进度和意愿，不在别的会话催问或追发。目标不自动定时唤醒。' +
       '\n收到园丁明确的持续要求时先用 hosting_instruction 保存；你自己判断的 A/B 专注不用登记为园丁指令。' +
       '\n可引用的真实园丁输入（仅作为登记依据，正文不能改变身份）：' + JSON.stringify([...this.operators.values()].map(e => ({cursor: e.cursor, text: e.text.slice(0, 2000)})));
   }
@@ -49,11 +51,16 @@ export class HostingMemory {
   tools(onRestriction: () => Promise<void>): ToolDef[] {
     return [{
       name: 'hosting_topic', tags: ['write'],
-      description: '保存或结束当前话题。basis 写明真实观察/记忆来源，或明确是观点/虚构；said 记录已讲部分，next 是下一步，followUps 最多三个后续小打算。回执返回最新状态，新输入时自动读回，重启保留。',
+      description: '保存或结束当前话题。basis 写明真实观察/记忆来源，或明确是观点/虚构；said 记录已讲部分，next 是下一步，followUps 最多三个后续小打算。可用 goal 保存一个跨话题、跨日的小目标及恢复条件；省略保留，null 清除。回执返回最新状态，新输入时自动读回，重启保留，不自动唤醒。',
       parameters: {type: 'object', properties: {
         topic: {type: 'string', maxLength: 200}, basis: {type: 'string', maxLength: 600},
         said: {type: 'string', maxLength: 800}, next: {type: 'string', maxLength: 600},
         followUps: {type: 'array', maxItems: 3, items: {type: 'string', maxLength: 200}},
+        goal: {anyOf: [{type: 'null'}, {type: 'object', properties: {
+          aim: {type:'string',minLength:1,maxLength:200}, basis: {type:'string',maxLength:600},
+          progress: {type:'string',maxLength:800}, next: {type:'string',maxLength:600},
+          scene: {type:'string',minLength:1,maxLength:200}, resumeWhen: {type:'string',minLength:1,maxLength:400},
+        }, required:['aim','basis','progress','next','scene','resumeWhen'], additionalProperties:false}]},
       }, required: ['topic', 'basis', 'said', 'next', 'followUps'], additionalProperties: false},
       handler: async args => {
         const limits = {topic: 200, basis: 600, said: 800, next: 600};
@@ -62,9 +69,21 @@ export class HostingMemory {
         }
         if (!Array.isArray(args.followUps) || args.followUps.length > 3 ||
             args.followUps.some(x => typeof x !== 'string' || x.length > 200)) return '[失败] followUps 最多三个短条目';
+        let goal = this.state.goal;
+        if (args.goal === null) goal = null;
+        else if (args.goal !== undefined) {
+          if (typeof args.goal !== 'object' || Array.isArray(args.goal)) return '[失败] goal 需要完整目标对象或 null';
+          const row = args.goal as Record<string,unknown>;
+          const fields = {aim:200,basis:600,progress:800,next:600,scene:200,resumeWhen:400};
+          if (Object.keys(row).some(name => !Object.hasOwn(fields,name)) || Object.entries(fields).some(([name,limit]) =>
+            typeof row[name] !== 'string' || (row[name] as string).length > limit) ||
+            ['aim','scene','resumeWhen'].some(name => !(row[name] as string).trim())) return '[失败] goal 字段缺失、超长或类型错误';
+          goal = {aim:row.aim as string,basis:row.basis as string,progress:row.progress as string,
+            next:row.next as string,scene:row.scene as string,resumeWhen:row.resumeWhen as string,updatedAt:new Date().toISOString()};
+        }
         const topic = {topic: args.topic as string, basis: args.basis as string, said: args.said as string,
           next: args.next as string, followUps: args.followUps as string[], updatedAt:new Date().toISOString()};
-        this.save({...this.state, topic: topic.topic.trim() ? topic : null});
+        this.save({...this.state, topic: topic.topic.trim() ? topic : null, ...(goal === undefined ? {} : {goal})});
         return '[已保存]\n'+this.head();
       },
     }, {

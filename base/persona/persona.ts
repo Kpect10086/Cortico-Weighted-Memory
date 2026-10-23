@@ -10,7 +10,7 @@ import { renderSections, renderTemplate } from 'cortico/core/template.ts';
 import type { Language } from 'cortico/core/language.ts';
 import { historyPanelDecl, workspaceInvoke, workspacePanelDecl } from './webUiSurface.ts';
 import { webUiText } from './strings.ts';
-import { HANDOFF_NOTE_TYPE, handoffNoteStamp, renderHandoffNote } from './handoffNote.ts';
+import { HANDOFF_NOTE_TYPE, HANDOFF_NOTE_TOKENS, deliveryNotice, handoffNoteStamp, renderHandoffNote } from './handoffNote.ts';
 import { SAVE_BLOB_DECL, saveBlobTool } from './blobs.ts';
 import { BLOBS_DIR, LIST_DIR_CAP, GitWorkspaceMemory, type WorkspaceBlobStore } from './memory.ts';
 import { WORKSPACE_TOOL_DECLS, workspaceTools } from './workspaceTools.ts';
@@ -563,7 +563,7 @@ export class Cormini implements Persona {
     if (externals.length === 0) return;
     // 外部事件投递复位静默时长。
     this.heartbeat.noteActivity();
-    this.core?.injectInternal(`[system] ${externals.length} 条新事件。`, 'notice');
+    this.core?.injectInternal(deliveryNotice(externals.length), 'notice');
   }
 
   /**
@@ -630,7 +630,7 @@ export class Cormini implements Persona {
     const tagged = (tag: ToolTag): ReadonlySet<string> => this.core?.toolsTagged(tag) ?? new Set<string>();
     const now = new Date();
     const { maxTokens, keepRatio } = this.context();
-    const note = renderHandoffNote(snapshot, {
+    const options = {
       speechTools: tagged('speak'),
       flowTools: tagged('flow'),
       snapshotTools: tagged('snapshot'),
@@ -639,7 +639,8 @@ export class Cormini implements Persona {
       budgetTokens: Math.floor(maxTokens * keepRatio),
       // 越过软阈值那一批起的是"当前语境",之前的是"更早的历史";分两条投递。
       splitAtMs: this.pressureSplitAt,
-    });
+    };
+    const note = renderHandoffNote(snapshot, options);
     const file = `${HANDOFF_DIR}${handoffNoteStamp(now)}.md`;
     const abs = join(this.memoryDir, file);
     mkdirSync(dirname(abs), { recursive: true });
@@ -651,8 +652,9 @@ export class Cormini implements Persona {
     this.pressureSplitAt = null;
     // 醒来那句话读 lastHandoffFile,所以先写文件。
     this.core?.injectInternal(this.handoffNote(), 'handoff');
-    // 两段各是一条事件,同批投递(渲染进同一帧);远近之分靠各自的抬头与时间范围。
-    for (const part of note.parts) this.core?.injectExternal(part.text, HANDOFF_NOTE_TYPE);
+    // 归档保留阶段预算内的详情，模型先读短版，缺少事实时按路径查原笔记。
+    const delivered = renderHandoffNote(snapshot, { ...options, budgetTokens: Math.min(options.budgetTokens, HANDOFF_NOTE_TOKENS) });
+    for (const part of delivered.parts) this.core?.injectExternal(part.text, HANDOFF_NOTE_TYPE);
     return { tail: this.handoffTail(snapshot) };
   }
 
@@ -672,7 +674,7 @@ export class Cormini implements Persona {
   protected handoffNoteLines(): string[] {
     return [
       '[system] 交接完了。之前的上下文已经全部清空,工作区的文件都还在。',
-      `清空前的一段写成了交接笔记,随这一批送到,也存在 ${this.lastHandoffFile ?? HANDOFF_DIR} 里:`,
+      `随批送到的是交接短版；需要核对省略的事实、约定或回执时，用 read_file 读取 ${this.lastHandoffFile ?? HANDOFF_DIR} 中的详细笔记。`,
       '按时间分段,有内容的段才送到;「最近的一段」接着现在,「更早的一段」只作参考。',
       '只有最近段保留对外发言的具体入参与实际回执,更早段整条省略这类调用。',
       '入参是当时拟发出的内容,对方是否收到、收到多少要看回执和后续事件;已受理不代表已经送达。',

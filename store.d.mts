@@ -17,6 +17,8 @@ export class MemoryStore {
   archiveEvent(event: {scope:string;text:string;source:string;createdAt:number;run:string}): string;
   compactPendingEvents(): {sources:number;segments:number};
   search(query: string, scopes: string[], limit?: number, now?:number): MemoryRow[];
+  evidence(id: string, offset?: number, scopes?: string[], now?: number): {rows: {id:string;scope:string;speaker:string;receivedAt:number;text:string}[];matched:number;sourceIds:string[];missing:number;fragments:boolean};
+  audit(scopes: string[], now?: number): {scanned:number;total:number;truncated:boolean;duplicates:{ids:string[];scope:string;approximate:boolean}[];missingSources:{id:string;missingMessages:number;missingRecords:number}[];note:string};
   captureMessage(input: {source:string;scope:string;text:string;createdAt:number;run?:string;speaker?:string}): void;
   remember(row: { text: string; sourceId?: string; sourceIds?: string[]; sourceMessageIds?: string[]; occurredAt?: string|null; timeConfidence?:number|null; timezone?:string; category?:string; importance: number; reason: string; kind: string }, scopes: string[], threshold?:number): string;
   manual(input: {text:string;scope:string;sourceType:string;kind:string;importance:number;reason:string;occurredAt?:string|null;effectiveAt?:string|null;tags?:string[];threshold?:number}): string;

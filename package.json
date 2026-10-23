@@ -1,6 +1,6 @@
 {
   "name": "cortico-bot-weighted-memory",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "main": "./index.ts",
   "description": "分区权重记忆：Cortico Persona 与 Memory 扩展，支持有证据事件摘要、分区预算、人工审核和版本回滚。",
@@ -74,7 +74,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "cortico": "0.2.4",
+    "cortico": "0.2.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "esbuild": "^0.28.2"
