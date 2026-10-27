@@ -1,9 +1,11 @@
 import base from './base/webui/client.ts';
 import type { WebUiClientBundle } from 'cortico/web/shared/client-panel.ts';
+import type {SearchReceipt} from './store.mjs';
 
 type Memory = { id: string; scope: string; text: string; kind: string; importance: number; reason: string; source: string; createdAt: number; state: string; revision: string; reviewError?: boolean; reviewPending?: boolean; metadata:string;trainingApproved?:boolean };
 type Detail = Memory & { audit: Array<{ at: number; operation: string; detail: string }> };
 type Evidence = {rows:Array<{id:string;scope:string;speaker:string;receivedAt:number;text:string;reviewPending?:boolean;reviewError?:boolean}>;matched:number;sourceIds:string[];missing:number;fragments:boolean};
+type SearchResult = {rows:Array<{id:string;scope:string;text:string;kind:string;importance:number;createdAt:number;textTruncated:boolean;memoryIds:string[];linkedMemoryCount:number;linksTruncated:boolean}>;receipt:SearchReceipt};
 type Snapshot = {
   total: number; chars: number; records: number; limit: number; matched: number;
   pendingSummary: number; oldestPendingAt: number | null;
@@ -17,6 +19,51 @@ const bundle: WebUiClientBundle = { panels: { ...base.panels,
   'weighted-memory': { mount(ctx) {
     const { ui, root } = ctx;
     const controls = ui.rowbar();
+    const lookup=ui.sheet({title:'权重检索 · 记忆与原文',desc:'先查已通过记忆，再查来源并核对原话。管理操作与检索使用同一份资料。'});
+    const lookupQuery=ui.input({placeholder:'关键词、原文片段或编号'});lookupQuery.maxLength=300;lookupQuery.setAttribute('aria-label','权重检索关键词');
+    const lookupScope=ui.input({value:'main'});lookupScope.setAttribute('aria-label','检索会话');
+    const lookupView=ui.select({value:'memories',options:[{value:'memories',label:'已通过记忆'},{value:'sources',label:'原始来源片段'}]});lookupView.setAttribute('aria-label','检索资料类型');
+    const lookupFrom=ui.input({type:'date'}),lookupTo=ui.input({type:'date'});
+    const lookupControls=ui.rowbar(),lookupResults=ui.h('div'),lookupReceipt=ui.msgline();
+    lookupReceipt.setAttribute('role','status');
+    let lookupRequest=0,lookupOffset=0,lookupStarted=false;
+    const runLookup=async(start=0)=>{
+      const ticket=++lookupRequest;lookupStarted=true;lookupOffset=start;
+      try{
+        const data=await ctx.invoke<SearchResult>('search',[{query:lookupQuery.value,scope:lookupScope.value,view:lookupView.value,offset:start,
+          from:lookupFrom.value?new Date(lookupFrom.value+'T00:00:00').toISOString():null,to:lookupTo.value?new Date(lookupTo.value+'T23:59:59.999').toISOString():null}]);
+        if(ctx.signal.aborted || ticket!==lookupRequest)return;
+        const receipt=data.receipt;
+        lookupReceipt.textContent=`会话 ${receipt.scopes.join('、')}${receipt.includesSharedCore?'（含共享核心摘要）':''}；记录时间 ${receipt.from ?? '不限'} ～ ${receipt.to ?? '不限'}；可检索 ${receipt.eligibleRecords} 条，匹配 ${receipt.matchedRecords} 条，本页 ${receipt.returnedRecords} 条。查询${receipt.queryComplete?'完成':'未完成'}；结果${receipt.outputComplete?'已完整显示':'有分页或截断'}；历史采集完整性未知。${receipt.note}`;
+        const cards=data.rows.map(row=>{
+          const card=ui.sheet({title:`${row.kind==='raw'?'来源片段':'记忆'} · 权重 ${row.importance}`,desc:`${row.scope} · 记录时间 ${new Date(row.createdAt).toLocaleString()} · ${row.id}`});
+          const text=ui.h('pre',null,row.text+(row.textTruncated?'\n[正文已截断，请查看原话]':''));text.style.whiteSpace='pre-wrap';
+          const actions=ui.actions(),proof=ui.h('div');
+          actions.append(ui.button('核对原话',{onClick:async()=>{
+            try{const evidence=await ctx.invoke<Evidence>('evidence',[row.id,0]);if(ctx.signal.aborted || ticket!==lookupRequest)return;
+              const render=(e:Evidence)=>{proof.replaceChildren(ui.h('p',null,`${e.fragments?'来源片段，未定位完整原消息':'原始发言'} · 共 ${e.matched} 条 · 缺失 ${e.missing} 条`),...e.rows.map(message=>ui.h('pre',null,`${message.speaker || '说话人未知'} · ${new Date(message.receivedAt).toLocaleString()}\n${message.text}`)));
+                const next=startEvidence+e.rows.length;
+                if(next<e.matched)proof.append(ui.button('下一页原话',{onClick:async()=>{try{const following=await ctx.invoke<Evidence>('evidence',[row.id,next]);if(ctx.signal.aborted || ticket!==lookupRequest)return;startEvidence=next;render(following);}catch(e){lookupReceipt.textContent=String(e);}}}));
+                if(e.rows.some(message=>message.reviewPending))proof.append(ui.button('刷新原话审核',{onClick:async()=>{try{const following=await ctx.invoke<Evidence>('evidence',[row.id,startEvidence,true]);if(!ctx.signal.aborted && ticket===lookupRequest)render(following);}catch(e){lookupReceipt.textContent=String(e);}}}));};
+              let startEvidence=0;render(evidence);
+            }catch(e){lookupReceipt.textContent=String(e);}
+          }}),ui.button(row.kind==='raw'?'管理来源片段':'管理这条记忆',{onClick:()=>{filter.value=row.kind==='raw'?'raw':'memories';search.value=row.id;offset=0;void reload();}}));
+          for(const id of row.memoryIds)actions.append(ui.button('查看关联记忆 '+id.slice(0,12),{onClick:()=>{filter.value='memories';search.value=id;offset=0;void reload();}}));
+          card.body.append(text,actions,proof);
+          if(row.kind==='raw')card.body.append(ui.h('p',null,`关联已通过记忆 ${row.linkedMemoryCount} 条${row.linksTruncated?'；引用未全部展示':''}。`));
+          return card.el;
+        });
+        lookupResults.replaceChildren(...cards);
+        if(!cards.length)lookupResults.append(ui.h('p',null,'本次词面条件未命中，可换关键词或查来源；不能据此断言事情没有发生。'));
+        const pages=ui.actions();
+        if(start>0)pages.append(ui.button('上一页检索结果',{onClick:()=>{void runLookup(Math.max(0,start-20));}}));
+        if(receipt.nextOffset!==null)pages.append(ui.button('下一页检索结果',{onClick:()=>{void runLookup(receipt.nextOffset!);}}));
+        lookupResults.append(pages);
+      }catch(e){if(!ctx.signal.aborted && ticket===lookupRequest){lookupResults.replaceChildren();lookupReceipt.textContent=`检索未完成：${String(e)}`;}}
+    };
+    lookupControls.append(ui.field('查找内容',lookupQuery),ui.field('会话',lookupScope),ui.field('资料',lookupView),ui.field('记录日期起',lookupFrom),ui.field('记录日期止',lookupTo),ui.button('检索记忆与原文',{onClick:()=>{void runLookup();}}));
+    lookup.body.append(lookupControls,lookupReceipt,lookupResults);
+    lookupQuery.addEventListener('keydown',event=>{if(event.key==='Enter')void runLookup();},{signal:ctx.signal});
     const filter = ui.select({ value: 'memories', options: [
       { value: 'memories', label: '提炼后的记忆' }, { value: 'pending', label: '待审核' },
       { value: 'core', label: '核心' }, { value: 'rejected', label: '已停用 / 旧版本' },
@@ -81,7 +128,7 @@ const bundle: WebUiClientBundle = { panels: { ...base.panels,
         previous.disabled = offset === 0;
         next.disabled = offset + 30 >= data.matched;
         page.textContent = `${data.matched ? offset + 1 : 0}–${Math.min(offset + 30, data.matched)} / ${data.matched} 条`;
-        const overview = ui.sheet({ title: '分区权重记忆', desc: '长期检索只读取已通过记忆。普通候选按配置自动通过或待审，单句权重须达到配置门槛。每页30条。原始资料保留用于追溯。' });
+        const overview = ui.sheet({ title: '权重检索', desc: '长期检索只读取已通过记忆。普通候选按配置自动通过或待审，单句权重须达到配置门槛。每页30条。原始资料保留用于追溯。' });
         overview.body.append(ui.kv([
           { k: '资料总数', v: String(data.total) },
           { k: '待整理原始事件', v: String(data.pendingSummary) },
@@ -168,6 +215,7 @@ const bundle: WebUiClientBundle = { panels: { ...base.panels,
           return card.el;
         });
         body.replaceChildren(overview.el, ...cards);
+        if(lookupStarted)void runLookup(lookupOffset);
         if (data.rows.some(row => row.reviewPending)) refreshTimer = setTimeout(() => { void reload(); }, 1500);
       } catch (failure) {
         if (!ctx.signal.aborted && current === request) error.textContent = `读取记忆失败：${String(failure)}`;
@@ -183,7 +231,7 @@ const bundle: WebUiClientBundle = { panels: { ...base.panels,
     filter.addEventListener('change', () => { offset = 0; void reload(); }, { signal: ctx.signal });
     for(const input of [kind,sort]) input.addEventListener('change',()=>{offset=0;void reload();},{signal:ctx.signal});
     search.addEventListener('change',()=>{offset=0;void reload();},{signal:ctx.signal});
-    root.append(controls,bulkReason,bulk,manage.el,error,body);
+    root.append(lookup.el,controls,bulkReason,bulk,manage.el,error,body);
     void reload();
   } },
   'constitution':{mount(ctx){

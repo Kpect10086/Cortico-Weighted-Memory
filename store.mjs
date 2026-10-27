@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { anchorTime, absoluteSummary } from './event-time.mjs';
 import { dirname, join } from 'node:path';
 import {MEMORY_ATTRIBUTION_GUIDE} from './attribution.mjs';
+import {lookup} from './retrieval.mjs';
 export {MEMORY_ATTRIBUTION_GUIDE, MEMORY_SELECTION_GUIDE} from './attribution.mjs';
 
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
@@ -154,12 +155,13 @@ export class MemoryStore {
       ORDER BY importance DESC,createdAt DESC,id LIMIT ?`).all(...a.args, now/1000, JSON.stringify(rows.map(row => row.id)), ...patterns, count - rows.length);
     return [...rows, ...fallback];
   }
+  lookup(query, scopes, options) { return lookup(this, query, scopes, options); }
   evidence(id, offset = 0, scopes, now = Date.now()) {
     if (!Number.isSafeInteger(offset) || offset < 0) throw Error('Invalid evidence offset');
     const row = this.get(id);
     // Shared core summaries do not grant access to another conversation's raw messages.
-    if (!row || (scopes && (!scopes.includes(row.scope) || row.state !== 'active' || ['raw','archive'].includes(row.kind) || Date.parse(JSON.parse(row.metadata).effectiveAt) > now))) throw Error('Memory unavailable in current scope');
-    const meta = JSON.parse(row.metadata), ids = meta.sourceMessageIds ?? [], sourceIds = meta.sourceIds ?? [];
+    if (!row || (scopes && (!scopes.includes(row.scope) || row.state !== 'active' || row.kind==='archive' || Date.parse(JSON.parse(row.metadata).effectiveAt) > now))) throw Error('Memory unavailable in current scope');
+    const meta = JSON.parse(row.metadata), ids = meta.sourceMessageIds ?? (row.kind==='raw'?this.db.prepare('SELECT source FROM event_sources WHERE recordId=?').all(id).map(r=>r.source):[]), sourceIds = meta.sourceIds ?? (row.kind==='raw'?[id]:[]);
     const rawCount = Number(this.db.prepare('SELECT count(*) AS n FROM raw_messages WHERE scope=? AND id IN (SELECT value FROM json_each(?))').get(row.scope, JSON.stringify(ids)).n);
     const fragments = rawCount === 0;
     const rows = fragments

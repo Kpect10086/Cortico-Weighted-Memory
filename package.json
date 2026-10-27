@@ -1,11 +1,10 @@
 {
   "name": "cortico-bot-weighted-memory",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "main": "./index.ts",
-  "description": "分区权重记忆：Cortico Persona 与 Memory 扩展，支持有证据事件摘要、分区预算、人工审核和版本回滚。",
+  "description": "权重检索：让 Cortico 按重要程度记住有用的事，查回原话，分清谁说的，并保留审核与纠错记录。",
   "license": "MIT",
-  "author": "Kpect10086",
   "keywords": [
     "cortico-bot",
     "cortico",
@@ -27,7 +26,7 @@
   "cortico": {
     "kind": "bot",
     "api": 7,
-    "displayName": "分区权重记忆",
+    "displayName": "权重检索",
     "webUiClient": "./dist/webui.js",
     "webUiStyle": "./dist/webui.css",
     "describe": "describe.json",
@@ -38,10 +37,10 @@
     ],
     "locales": {
       "zh": {
-        "displayName": "分区权重记忆"
+        "displayName": "权重检索"
       },
       "en": {
-        "displayName": "Weighted Memory"
+        "displayName": "Weighted Retrieval"
       }
     }
   },
@@ -61,14 +60,15 @@
     "tests",
     "scripts",
     "tsconfig*.json",
-    "dist/webui.css"
+    "dist/webui.css",
+    "docs"
   ],
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "test": "node self-check.mjs && tsx context-self-check.ts && tsx hosting-self-check.ts && node --import tsx --test tests/install.test.ts tests/export.test.ts tests/workspace.test.ts tests/import.test.ts tests/migrate.test.ts",
+    "test": "node self-check.mjs && tsx context-self-check.ts && tsx hosting-self-check.ts && node --import tsx --test tests/install.test.ts tests/export.test.ts tests/workspace.test.ts tests/import.test.ts tests/migrate.test.ts tests/retrieval.test.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
     "build:web": "node scripts/build-web.mjs"
   },

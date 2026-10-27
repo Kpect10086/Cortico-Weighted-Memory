@@ -1,4 +1,7 @@
 export interface MemoryRow { id: string; scope: string; text: string; kind: string; importance: number; reason: string; source: string; createdAt: number; state: string; processed: number; metadata: string }
+export interface SearchOptions {view?:'memories'|'sources';from?:string|null;to?:string|null;offset?:number;limit?:number;now?:number}
+export interface SearchReceipt {query:string;view:string;scopes:string[];includesSharedCore:boolean;from:string|null;to:string|null;eligibleRecords:number;matchedRecords:number;returnedRecords:number;nextOffset:number|null;queryComplete:boolean;outputComplete:boolean;historyCompleteness:string;note:string}
+export interface SearchReport {rows:Array<MemoryRow & {sourceMessageIds?:string[];memoryIds?:string[];linkedMemoryCount?:number;textTruncated?:boolean}>;receipt:SearchReceipt}
 export const DEFAULTS: { maxChars: number; coreChars: number; recentChars: number; recallChars: number; recentDays: number; summaryIntervalMinutes: number; singleThreshold: number };
 export const MEMORY_WEIGHT_GUIDE: string;
 export const MEMORY_ATTRIBUTION_GUIDE: string;
@@ -17,6 +20,7 @@ export class MemoryStore {
   archiveEvent(event: {scope:string;text:string;source:string;createdAt:number;run:string}): string;
   compactPendingEvents(): {sources:number;segments:number};
   search(query: string, scopes: string[], limit?: number, now?:number): MemoryRow[];
+  lookup(query:string,scopes:string[],options?:SearchOptions): SearchReport;
   evidence(id: string, offset?: number, scopes?: string[], now?: number): {rows: {id:string;scope:string;speaker:string;receivedAt:number;text:string}[];matched:number;sourceIds:string[];missing:number;fragments:boolean};
   audit(scopes: string[], now?: number): {scanned:number;total:number;truncated:boolean;duplicates:{ids:string[];scope:string;approximate:boolean}[];missingSources:{id:string;missingMessages:number;missingRecords:number}[];note:string};
   captureMessage(input: {source:string;scope:string;text:string;createdAt:number;run?:string;speaker?:string}): void;
